@@ -12,13 +12,12 @@ static ConfigManager *configManagerInstance = nullptr;
 static WiFiManager *currentWM = nullptr;
 
 ConfigManager::ConfigManager()
-    : configButtonPin(-1), paramApiKey(nullptr), paramLatitude(nullptr),
-      paramLongitude(nullptr), paramLocationName(nullptr),
-      paramRefreshMinutes(nullptr), paramLowPowerMode(nullptr),
-      paramHourInterval(nullptr) {
+    : configButtonPin(-1), paramLatitude(nullptr), paramLongitude(nullptr),
+      paramLocationName(nullptr), paramRefreshMinutes(nullptr),
+      paramLowPowerMode(nullptr), paramHourInterval(nullptr),
+      paramUnits(nullptr), paramEnableAlerts(nullptr) {
 
   // Set default values
-  config.apiKey = "";
   config.latitude = "";
   config.longitude = "";
   config.locationName = "";
@@ -41,8 +40,6 @@ bool ConfigManager::begin(int buttonPin) {
   loadConfig();
 
   Serial.println("[ConfigManager] Configuration loaded");
-  Serial.print("[ConfigManager] API Key: ");
-  Serial.println(config.apiKey.length() > 0 ? "(set)" : "(not set)");
   Serial.print("[ConfigManager] Location: ");
   Serial.println(config.locationName);
 
@@ -79,6 +76,12 @@ bool ConfigManager::begin(int buttonPin) {
       reason = "WiFi connection failed: " + ssid;
     }
     return startConfigPortal(reason.c_str());
+  }
+
+  if (!isConfigured()) {
+    Serial.println(
+        "[ConfigManager] Location not configured - starting config portal...");
+    return startConfigPortal("Location Setup Required");
   }
 
   Serial.println("[ConfigManager] WiFi connected!");
@@ -142,7 +145,6 @@ bool ConfigManager::startConfigPortal(const char *reason) {
   currentWM = nullptr;
 
   // Cleanup WiFiManager parameters
-  delete paramApiKey;
   delete paramLatitude;
   delete paramLongitude;
   delete paramLocationName;
@@ -152,7 +154,6 @@ bool ConfigManager::startConfigPortal(const char *reason) {
   delete paramUnits;
   delete paramEnableAlerts;
 
-  paramApiKey = nullptr;
   paramLatitude = nullptr;
   paramLongitude = nullptr;
   paramLocationName = nullptr;
@@ -168,10 +169,6 @@ bool ConfigManager::startConfigPortal(const char *reason) {
 void ConfigManager::setupWiFiManager(WiFiManager &wm) {
   // Create custom parameters
   // Note: WiFiManager allocates char buffers, but we need to manage memory
-
-  // API Key (max 64 chars)
-  paramApiKey = new WiFiManagerParameter("api_key", "OpenWeatherMap API Key",
-                                         config.apiKey.c_str(), 64);
 
   // Latitude
   paramLatitude = new WiFiManagerParameter(
@@ -223,12 +220,11 @@ void ConfigManager::setupWiFiManager(WiFiManager &wm) {
   paramEnableAlerts = new WiFiManagerParameter(
       config.enableAlertDisplay
           ? "<br><label><input type='checkbox' name='alerts' value='1' "
-            "checked> Show Weather Alerts</label>"
+            "checked> Show Weather Alerts (US NWS)</label>"
           : "<br><label><input type='checkbox' name='alerts' value='1'> Show "
-            "Weather Alerts</label>");
+            "Weather Alerts (US NWS)</label>");
 
   // Add parameters to WiFiManager
-  wm.addParameter(paramApiKey);
   wm.addParameter(paramLatitude);
   wm.addParameter(paramLongitude);
   wm.addParameter(paramLocationName);
@@ -253,11 +249,6 @@ void ConfigManager::saveParamsCallback(WiFiManager &wm) {
 }
 
 void ConfigManager::readWiFiManagerParams(WiFiManager &wm) {
-  if (paramApiKey) {
-    config.apiKey = String(paramApiKey->getValue());
-    config.apiKey.trim();
-  }
-
   if (paramLatitude) {
     config.latitude = String(paramLatitude->getValue());
     config.latitude.trim();
@@ -305,8 +296,6 @@ void ConfigManager::readWiFiManagerParams(WiFiManager &wm) {
   }
 
   Serial.println("[ConfigManager] Parameters read from portal:");
-  Serial.print("  API Key: ");
-  Serial.println(config.apiKey.length() > 0 ? "(set)" : "(empty)");
   Serial.print("  Latitude: ");
   Serial.println(config.latitude);
   Serial.print("  Longitude: ");
@@ -324,7 +313,6 @@ void ConfigManager::readWiFiManagerParams(WiFiManager &wm) {
 void ConfigManager::loadConfig() {
   preferences.begin(PREFS_NAMESPACE, true); // Read-only mode
 
-  config.apiKey = preferences.getString("api_key", "");
   config.latitude = preferences.getString("latitude", "");
   config.longitude = preferences.getString("longitude", "");
   config.locationName = preferences.getString("location", "");
@@ -339,8 +327,6 @@ void ConfigManager::loadConfig() {
   preferences.end();
 
   Serial.println("[ConfigManager] Loaded config from NVS");
-  Serial.print("  API Key: ");
-  Serial.println(config.apiKey.length() > 0 ? "(set)" : "(empty)");
   Serial.print("  Latitude: ");
   Serial.println(config.latitude);
   Serial.print("  Longitude: ");
@@ -358,7 +344,6 @@ void ConfigManager::loadConfig() {
 void ConfigManager::saveConfig() {
   preferences.begin(PREFS_NAMESPACE, false); // Read-write mode
 
-  preferences.putString("api_key", config.apiKey);
   preferences.putString("latitude", config.latitude);
   preferences.putString("longitude", config.longitude);
   preferences.putString("location", config.locationName);
@@ -384,7 +369,6 @@ void ConfigManager::resetConfig() {
   wm.resetSettings();
 
   // Reset to defaults
-  config.apiKey = "";
   config.latitude = "";
   config.longitude = "";
   config.locationName = "";

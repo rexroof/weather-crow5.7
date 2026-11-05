@@ -5,7 +5,7 @@ Weather station using [CrowPanel ESP32 E-Paper HMI 5.79-inch Display](https://ww
 
 This code based on the CrowPanel ESP32 E-Paper HMI 5.79-inch Display [example](https://www.elecrow.com/wiki/CrowPanel_ESP32_E-paper_5.79-inch_HMI_Display.html). I've added and modified the code to display custom weather icons and font rendering.
 It is a weather station that displays the current weather and forecast for the next 5 to 25 hours depending on the configuration.
-The weather data is fetched from the [OpenWeatherMap](https://openweathermap.org/) API.
+The weather data is fetched from the [Open-Meteo](https://open-meteo.com/) API, and active weather alerts are fetched from the [US National Weather Service](https://www.weather.gov/documentation/services-web-api) API.
 
 ---
 
@@ -23,13 +23,12 @@ The weather data is fetched from the [OpenWeatherMap](https://openweathermap.org
 1. Device creates WiFi hotspot: **WeatherCrow-Config**
 2. Connect to it on your phone/computer
 3. Go to **192.168.4.1**
-4. Enter your WiFi credentials and [OpenWeatherMap API key](https://openweathermap.org/api)
+4. Enter your WiFi credentials and location coordinates (no API key required!)
 
 ---
 
 ## What You Need
 - Hardware: [CrowPanel ESP32 E-Paper HMI 5.79-inch Display](https://www.elecrow.com/crowpanel-esp32-5-79-e-paper-hmi-display-with-272-792-resolution-black-white-color-driven-by-spi-interface.html)
-- API Key: [OpenWeatherMap API key](https://openweathermap.org/) (free tier works!)
 
 ---
 
@@ -76,7 +75,8 @@ If you want to modify the code or build from source:
 
 # Credits
 - Weather data:
-  - Weather data provided by [OpenWeather](https://openweathermap.org/)
+  - Weather data provided by [Open-Meteo.com](https://open-meteo.com/)
+  - Weather alerts provided by [US National Weather Service](https://www.weather.gov/)
 
 - Icons:
   - [Weather Icons](https://erikflowers.github.io/weather-icons/)

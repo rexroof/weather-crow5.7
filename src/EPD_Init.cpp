@@ -88,8 +88,14 @@ void EPD_Init(void)
 {
   EPD_HW_RESET();
   EPD_READBUSY();
-  EPD_WR_REG(0x12);
+  EPD_WR_REG(0x12); // SWRESET
   EPD_READBUSY();
+
+  EPD_WR_REG(0x18); // Use built-in temperature sensor for full-contrast waveform
+  EPD_WR_DATA8(0x80);
+
+  EPD_WR_REG(0x3C); // Border waveform control
+  EPD_WR_DATA8(0x05);
 }
 
 void EPD_FastMode1Init(void)
@@ -253,6 +259,12 @@ void EPD_Display(const uint8_t *ImageBW)
     }
     EPD_WR_DATA8(tempOriginal);
   }
+  EPD_SetRAMMA();
+  EPD_WR_REG(0x26);
+  for (i = 0; i < ALLSCREEN_BYTES; i++)
+  {
+    EPD_WR_DATA8(0x00);
+  }
   EPD_SetRAMSP();
   EPD_SetRAMSA();
   EPD_WR_REG(0xa4); // write RAM for black(0)/white (1)
@@ -266,6 +278,12 @@ void EPD_Display(const uint8_t *ImageBW)
       templine = 0;
     }
     EPD_WR_DATA8(tempOriginal);
+  }
+  EPD_SetRAMSA();
+  EPD_WR_REG(0xa6);
+  for (i = 0; i < ALLSCREEN_BYTES; i++)
+  {
+    EPD_WR_DATA8(0x00);
   }
 }
 
