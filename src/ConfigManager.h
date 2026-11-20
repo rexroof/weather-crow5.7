@@ -38,7 +38,8 @@ struct AppConfig {
   int refreshMinutes;
   bool lowPowerMode;
   int hourInterval;
-  String units; // "metric" or "imperial"
+  String units;      // "metric" or "imperial"
+  String timeFormat; // "12h" or "24h"
   bool enableAlertDisplay;
   String alertRegion; // "auto", "US", "CA", "NO", "DE"
 
@@ -52,7 +53,8 @@ struct AppConfig {
   // Default constructor with sensible defaults
   AppConfig()
       : refreshMinutes(15), lowPowerMode(false), hourInterval(1),
-        units("metric"), enableAlertDisplay(true), alertRegion("auto") {}
+        units("metric"), timeFormat("24h"), enableAlertDisplay(true),
+        alertRegion("auto") {}
 
   // Check if manual coordinates were entered by the user
   bool hasManualCoordinates() const {
@@ -153,6 +155,7 @@ public:
   bool getLowPowerMode() const { return config.lowPowerMode; }
   int getHourInterval() const { return config.hourInterval; }
   String getUnits() const { return config.units; }
+  String getTimeFormat() const { return config.timeFormat; }
   bool getEnableAlertDisplay() const { return config.enableAlertDisplay; }
   String getAlertRegion() const { return config.alertRegion; }
 
@@ -177,30 +180,18 @@ private:
   void (*portalStartCallback)(const char *, const char *,
                               const char *) = nullptr;
 
-  // WiFiManager custom parameters
-  WiFiManagerParameter *paramGeoHint;
+  // Non-owning pointers to active WiFiManager text parameters while portal runs
   WiFiManagerParameter *paramLatitude;
   WiFiManagerParameter *paramLongitude;
   WiFiManagerParameter *paramLocationName;
   WiFiManagerParameter *paramCalendarUrl;
   WiFiManagerParameter *paramRefreshMinutes;
-  WiFiManagerParameter *paramLowPowerMode;
   WiFiManagerParameter *paramHourInterval;
-  WiFiManagerParameter *paramUnits;
-  WiFiManagerParameter *paramEnableAlerts;
-  WiFiManagerParameter *paramAlertRegion;
-  String geoHintHtml;
-  String alertRegionHtml;
 
   /**
    * Check if config button is being held during boot
    */
   bool isConfigButtonHeld();
-
-  /**
-   * Setup WiFiManager with custom parameters
-   */
-  void setupWiFiManager(WiFiManager &wm);
 
   /**
    * Callback when WiFiManager saves parameters

@@ -50,6 +50,7 @@ private:
   int hourInterval = DEFAULT_HOUR_INTERVAL;
   bool lowPowerMode = DEFAULT_LOW_POWER_MODE;
   String units = "metric";
+  String timeFormat = "24h";
   bool enableAlertDisplay = true;
   String alertRegion = "auto";
   String geoCountryCode;
@@ -71,14 +72,26 @@ private:
   JsonDocument weatherApiResponse;
   bool ledState = false;
 
+  struct DailySummary {
+    bool valid = false;
+    int tempMax = 0;
+    int tempMin = 0;
+    int precipProb = 0;
+    float precipMm = 0.0f;
+    String condition;
+  };
+  DailySummary dailySummary[2]; // [0] = Today, [1] = Tomorrow
+  String lastHttpDateHeader;
+
   /**
    * Weather information structure to store processed data from API
    */
   struct WeatherInfo {
     String weather;
-    long currentDateTime;
-    long sunrise;
-    long sunset;
+    long currentDateTime = 0;
+    long refreshDateTime = 0;
+    long sunrise = 0;
+    long sunset = 0;
     String temperature;
     String tempIntegerPart;
     String tempDecimalPart;
@@ -114,9 +127,15 @@ private:
     if (acceptHeader != nullptr) {
       http.addHeader("Accept", acceptHeader);
     }
+    const char *headerKeys[] = {"Date"};
+    http.collectHeaders(headerKeys, 1);
+    lastHttpDateHeader = "";
     httpResponseCode = http.GET();
     String payload = "{}";
     if (httpResponseCode > 0) {
+      if (http.hasHeader("Date")) {
+        lastHttpDateHeader = http.header("Date");
+      }
       payload = http.getString();
     }
     http.end();
@@ -179,6 +198,7 @@ private:
     hourInterval = configManager.getHourInterval();
     lowPowerMode = configManager.getLowPowerMode();
     units = configManager.getUnits();
+    timeFormat = configManager.getTimeFormat();
     enableAlertDisplay = configManager.getEnableAlertDisplay();
     alertRegion = configManager.getAlertRegion();
 
@@ -412,7 +432,29 @@ private:
   }
 
   /**
-   * Converts Unix timestamp to short time format (hour with AM/PM)
+   * Converts Unix timestamp to hour:minute format honoring 12h (AM/PM) or 24h
+   */
+  String convertUnixTimeToTimeString(long unixTime) {
+    if (unixTime == 0) {
+      return "N/A";
+    }
+
+    time_t rawtime = unixTime;
+    struct tm *dt = gmtime(&rawtime);
+    char buffer[30];
+    if (timeFormat == "24h") {
+      strftime(buffer, sizeof(buffer), "%H:%M", dt);
+    } else {
+      strftime(buffer, sizeof(buffer), "%I:%M %p", dt);
+      if (buffer[0] == '0') {
+        memmove(buffer, buffer + 1, strlen(buffer));
+      }
+    }
+    return String(buffer);
+  }
+
+  /**
+   * Converts Unix timestamp to short time format ("3 PM" in 12h, "15:00" in 24h)
    */
   String convertUnixTimeToShortDateTimeString(long unixTime) {
     if (unixTime == 0) {
@@ -423,11 +465,14 @@ private:
     struct tm *dt;
     char buffer[30];
     dt = gmtime(&rawtime);
-    strftime(buffer, sizeof(buffer), "%I %p", dt);
-
-    // Remove leading zero from hour
-    if (buffer[0] == '0') {
-      memmove(buffer, buffer + 1, strlen(buffer));
+    if (timeFormat == "24h") {
+      strftime(buffer, sizeof(buffer), "%H:00", dt);
+    } else {
+      strftime(buffer, sizeof(buffer), "%I %p", dt);
+      // Remove leading zero from hour
+      if (buffer[0] == '0') {
+        memmove(buffer, buffer + 1, strlen(buffer));
+      }
     }
     return String(buffer);
   }
@@ -507,7 +552,8 @@ private:
            "&current=temperature_2m,relative_humidity_2m,surface_pressure,"
            "wind_speed_10m,weather_code,is_day,rain,snowfall,uv_index"
            "&hourly=temperature_2m,weather_code,is_day"
-           "&daily=sunrise,sunset"
+           "&daily=weather_code,temperature_2m_max,temperature_2m_min,"
+           "precipitation_probability_max,precipitation_sum,sunrise,sunset"
            "&temperature_unit=" +
            tempUnit +
            "&wind_speed_unit=ms&precipitation_unit=mm"
@@ -681,6 +727,44 @@ private:
       }
     }
     long utcTime = timestamp - isoOffsetSeconds;
+    return utcTime + localUtcOffsetSeconds;
+  }
+
+  /**
+   * Parses an RFC-7231 HTTP Date header (e.g., "Fri, 20 Nov 2026 20:29:30 GMT")
+   * into a local Unix timestamp adjusted by localUtcOffsetSeconds.
+   */
+  long parseHttpDateToLocalUnixTime(const String &dateHeader,
+                                    long localUtcOffsetSeconds) {
+    if (dateHeader.length() < 25)
+      return 0;
+    char dow[8] = {0}, monStr[8] = {0};
+    int d = 0, y = 0, hh = 0, mm = 0, ss = 0;
+    if (sscanf(dateHeader.c_str(), "%7[^,], %d %7s %d %d:%d:%d", dow, &d,
+               monStr, &y, &hh, &mm, &ss) != 7) {
+      return 0;
+    }
+
+    static const char *const months[12] = {"Jan", "Feb", "Mar", "Apr",
+                                           "May", "Jun", "Jul", "Aug",
+                                           "Sep", "Oct", "Nov", "Dec"};
+    int m = 0;
+    for (int i = 0; i < 12; i++) {
+      if (strncasecmp(monStr, months[i], 3) == 0) {
+        m = i + 1;
+        break;
+      }
+    }
+    if (m == 0)
+      return 0;
+
+    int yr = y - (m <= 2);
+    int era = (yr >= 0 ? yr : yr - 399) / 400;
+    unsigned yoe = static_cast<unsigned>(yr - era * 400);
+    unsigned doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+    unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    long days = era * 146097L + static_cast<long>(doe) - 719468L;
+    long utcTime = days * 86400L + hh * 3600L + mm * 60L + ss;
     return utcTime + localUtcOffsetSeconds;
   }
 
@@ -1196,6 +1280,10 @@ private:
     weatherInfo.icon = wmoCodeToIcon(weatherCode, isDay);
     weatherInfo.currentDateTime =
         weatherApiResponse["current"]["time"].as<long>() + utcOffset;
+    long refreshLocalTime =
+        parseHttpDateToLocalUnixTime(lastHttpDateHeader, utcOffset);
+    weatherInfo.refreshDateTime =
+        (refreshLocalTime > 0) ? refreshLocalTime : weatherInfo.currentDateTime;
     weatherInfo.sunrise =
         (!weatherApiResponse["daily"]["sunrise"].isNull() &&
          weatherApiResponse["daily"]["sunrise"].size() > 0)
@@ -1216,8 +1304,39 @@ private:
         String(weatherApiResponse["current"]["wind_speed_10m"].as<float>(), 1);
     weatherInfo.timezone = weatherApiResponse["timezone"].as<String>();
 
-    // set RTC to set current time (if RTC is available)
-    setRTC(weatherInfo.currentDateTime);
+    // Extract daily high/low/precipitation summary for Today [0] and Tomorrow [1]
+    JsonObject daily = weatherApiResponse["daily"];
+    for (size_t d = 0; d < 2; d++) {
+      dailySummary[d].valid = false;
+      if (!daily.isNull() && !daily["temperature_2m_max"].isNull() &&
+          !daily["temperature_2m_min"].isNull() &&
+          d < daily["temperature_2m_max"].size() &&
+          d < daily["temperature_2m_min"].size()) {
+        dailySummary[d].valid = true;
+        dailySummary[d].tempMax =
+            (int)roundf(daily["temperature_2m_max"][d].as<float>());
+        dailySummary[d].tempMin =
+            (int)roundf(daily["temperature_2m_min"][d].as<float>());
+        dailySummary[d].precipProb =
+            (!daily["precipitation_probability_max"].isNull() &&
+             d < daily["precipitation_probability_max"].size())
+                ? daily["precipitation_probability_max"][d].as<int>()
+                : 0;
+        dailySummary[d].precipMm =
+            (!daily["precipitation_sum"].isNull() &&
+             d < daily["precipitation_sum"].size())
+                ? daily["precipitation_sum"][d].as<float>()
+                : 0.0f;
+        int dailyCode =
+            (!daily["weather_code"].isNull() && d < daily["weather_code"].size())
+                ? daily["weather_code"][d].as<int>()
+                : weatherCode;
+        dailySummary[d].condition = wmoCodeToWeatherMain(dailyCode);
+      }
+    }
+
+    // set RTC to current refresh time
+    setRTC(weatherInfo.refreshDateTime);
 
     // Process temperature for display
     int decimalPos = weatherInfo.temperature.indexOf('.');
@@ -1360,23 +1479,38 @@ private:
     snprintf(buffer, sizeof(buffer), "%s_sm", icon.c_str());
     EPD_drawImage(x + 2, y, getIcon(buffer));
 
-    // Time formatting (10 AM, 9 PM, etc.)
+    // Time formatting ("10 AM" / "9 PM" in 12h, or "15" / ":00" in 24h)
     long forecastTimeInt =
         hourly["time"][hourIndex].as<long>() +
         weatherApiResponse["utc_offset_seconds"].as<long>();
     String forecastTime = convertUnixTimeToShortDateTimeString(forecastTimeInt);
 
     int splitIndex = forecastTime.indexOf(' ');
-    String hour = forecastTime.substring(0, splitIndex);
-    String period = forecastTime.substring(splitIndex + 1);
+    String topLine;
+    String bottomLine;
+    if (splitIndex != -1) {
+      topLine = forecastTime.substring(0, splitIndex);
+      bottomLine = forecastTime.substring(splitIndex + 1);
+    } else {
+      int colonIndex = forecastTime.indexOf(':');
+      if (colonIndex != -1) {
+        topLine = forecastTime.substring(0, colonIndex);
+        bottomLine = forecastTime.substring(colonIndex);
+      } else {
+        topLine = forecastTime;
+        bottomLine = "";
+      }
+    }
 
     memset(buffer, 0, sizeof(buffer));
-    snprintf(buffer, sizeof(buffer), "%s", hour.c_str());
+    snprintf(buffer, sizeof(buffer), "%s", topLine.c_str());
     EPD_ShowStringRightAligned(x + 24, y + 80, buffer, FONT_SIZE_16, BLACK);
 
-    memset(buffer, 0, sizeof(buffer));
-    snprintf(buffer, sizeof(buffer), "%s", period.c_str());
-    EPD_ShowStringRightAligned(x + 26, y + 96, buffer, FONT_SIZE_16, BLACK);
+    if (bottomLine.length() > 0) {
+      memset(buffer, 0, sizeof(buffer));
+      snprintf(buffer, sizeof(buffer), "%s", bottomLine.c_str());
+      EPD_ShowStringRightAligned(x + 28, y + 96, buffer, FONT_SIZE_16, BLACK);
+    }
 
     // Vertical separator line
     uint16_t lineLength = 103;
@@ -1811,25 +1945,140 @@ private:
                weatherInfo.tempIntegerPart.c_str());
       EPD_ShowStringRightAligned(x, y, buffer, FONT_SIZE_92, BLACK);
       memset(buffer, 0, sizeof(buffer));
-      if (units == "metric") {
-        snprintf(buffer, sizeof(buffer), "C");
-        EPD_drawImage(x, y, degrees_sm);
-      } else {
-        snprintf(buffer, sizeof(buffer), "F");
-      }
+      EPD_drawImage(x, y, degrees_sm);
+      snprintf(buffer, sizeof(buffer), (units == "metric") ? "C" : "F");
       EPD_ShowString(x + 10, y + 24, buffer, FONT_SIZE_36, BLACK);
     } else {
-      if (units == "metric") {
-        snprintf(buffer, sizeof(buffer), "C");
-        EPD_drawImage(x - 2, y - 20, degrees_sm);
-      } else {
-        snprintf(buffer, sizeof(buffer), "F");
-      }
+      EPD_drawImage(x - 2, y - 20, degrees_sm);
+      snprintf(buffer, sizeof(buffer), (units == "metric") ? "C" : "F");
       EPD_ShowString(x + 12, y, buffer, FONT_SIZE_36, BLACK);
 
       snprintf(buffer, sizeof(buffer), "%s",
                weatherInfo.tempIntegerPart.c_str());
       EPD_ShowStringRightAligned(x, y, buffer, FONT_SIZE_36, BLACK);
+    }
+  }
+
+  /**
+   * Formats a daily precipitation amount in mm (metric) or inches (imperial).
+   * Returns empty string when precipitation is negligible (< 0.1 mm).
+   */
+  String formatDailyPrecipAmount(float precipMm) {
+    if (precipMm < 0.1f) {
+      return "";
+    }
+    char buf[24];
+    if (units == "imperial") {
+      float inches = precipMm / 25.4f;
+      if (inches < 0.01f) {
+        return "";
+      }
+      snprintf(buf, sizeof(buf), "%.2fin", inches);
+    } else {
+      snprintf(buf, sizeof(buf), "%.1fmm", precipMm);
+    }
+    return String(buf);
+  }
+
+  /**
+   * Renders Today & Tomorrow High/Low/Precipitation summary in the top-center
+   * area (x=278..558, y=10..148) when no calendar URL and no alert are active.
+   */
+  void displayDailySummaryCompact(uint16_t baseX, uint16_t baseY) {
+    char buffer[STRING_BUFFER_SIZE];
+    const char *dayLabels[2] = {"TODAY", "TOMORROW"};
+    const uint16_t rightEdge = baseX + 278;
+
+    for (size_t d = 0; d < 2; d++) {
+      if (!dailySummary[d].valid) {
+        continue;
+      }
+
+      uint16_t rowTop = baseY + d * 74;
+      String precipAmt = formatDailyPrecipAmount(dailySummary[d].precipMm);
+
+      // Day header + condition (e.g., "TODAY - Clouds")
+      String header = String(dayLabels[d]);
+      if (dailySummary[d].condition.length() > 0) {
+        header += " - " + dailySummary[d].condition;
+      }
+      header = truncateString(header, precipAmt.length() > 0 ? 18 : 24);
+      memset(buffer, 0, sizeof(buffer));
+      snprintf(buffer, sizeof(buffer), "%s", header.c_str());
+      EPD_ShowString(baseX, rowTop + 8, buffer, FONT_SIZE_16, BLACK, true);
+
+      // Optional precipitation volume right-aligned on header row
+      if (precipAmt.length() > 0) {
+        memset(buffer, 0, sizeof(buffer));
+        snprintf(buffer, sizeof(buffer), "%s", precipAmt.c_str());
+        EPD_ShowStringRightAligned(rightEdge, rowTop + 8, buffer, FONT_SIZE_16,
+                                   BLACK);
+      }
+
+      // High / Low temperature in 36px font
+      memset(buffer, 0, sizeof(buffer));
+      snprintf(buffer, sizeof(buffer), "%d/%d", dailySummary[d].tempMax,
+               dailySummary[d].tempMin);
+      EPD_ShowString(baseX, rowTop + 39, buffer, FONT_SIZE_36, BLACK, true);
+
+      // Precipitation probability with raindrop icon
+      EPD_drawImage(baseX + 152, rowTop + 23, getIcon("raindrop_sm"));
+      memset(buffer, 0, sizeof(buffer));
+      snprintf(buffer, sizeof(buffer), "%d%%", dailySummary[d].precipProb);
+      EPD_ShowString(baseX + 184, rowTop + 39, buffer, FONT_SIZE_36, BLACK,
+                     true);
+
+      // Divider between Today and Tomorrow
+      if (d == 0) {
+        EPD_DrawLine(baseX, rowTop + 66, rightEdge, rowTop + 66, BLACK);
+      }
+    }
+  }
+
+  /**
+   * Renders Today & Tomorrow High/Low/Precipitation summary stacked in the
+   * left column (x=16..252, y=16..260) when an alert occupies the top-center
+   * area and no calendar URL is configured.
+   */
+  void displayDailySummaryColumn(uint16_t baseX, uint16_t baseY) {
+    char buffer[STRING_BUFFER_SIZE];
+    const char *dayLabels[2] = {"TODAY", "TOMORROW"};
+
+    for (size_t d = 0; d < 2; d++) {
+      if (!dailySummary[d].valid) {
+        continue;
+      }
+
+      uint16_t rowTop = baseY + d * 130;
+
+      String header = String(dayLabels[d]);
+      if (dailySummary[d].condition.length() > 0) {
+        header += " - " + dailySummary[d].condition;
+      }
+      header = truncateString(header, 22);
+      memset(buffer, 0, sizeof(buffer));
+      snprintf(buffer, sizeof(buffer), "%s", header.c_str());
+      EPD_ShowString(baseX, rowTop + 6, buffer, FONT_SIZE_16, BLACK, true);
+
+      memset(buffer, 0, sizeof(buffer));
+      snprintf(buffer, sizeof(buffer), "%d / %d", dailySummary[d].tempMax,
+               dailySummary[d].tempMin);
+      EPD_ShowString(baseX, rowTop + 42, buffer, FONT_SIZE_36, BLACK, true);
+
+      String precipAmt = formatDailyPrecipAmount(dailySummary[d].precipMm);
+      memset(buffer, 0, sizeof(buffer));
+      if (precipAmt.length() > 0) {
+        snprintf(buffer, sizeof(buffer), "Precip: %d%% (%s)",
+                 dailySummary[d].precipProb, precipAmt.c_str());
+      } else {
+        snprintf(buffer, sizeof(buffer), "Precip: %d%%",
+                 dailySummary[d].precipProb);
+      }
+      EPD_ShowString(baseX, rowTop + 80, buffer, FONT_SIZE_16, BLACK, true);
+
+      if (d == 0) {
+        EPD_DrawLine(baseX, rowTop + 114, baseX + 234, rowTop + 114, BLACK);
+      }
     }
   }
 
@@ -1882,26 +2131,52 @@ private:
     clearScreen();
     char buffer[STRING_BUFFER_SIZE];
 
+    long displayTime = (weatherInfo.refreshDateTime > 0)
+                           ? weatherInfo.refreshDateTime
+                           : weatherInfo.currentDateTime;
+
+    // Top-right date
     memset(buffer, 0, sizeof(buffer));
-    snprintf(
-        buffer, sizeof(buffer), "%s ",
-        convertUnixTimeToDisplayFormat(weatherInfo.currentDateTime).c_str());
-    // snprintf(buffer, sizeof(buffer), "５月４日　土");
-    EPD_ShowStringRightAligned(790, 25, buffer, FONT_SIZE_36, BLACK);
+    snprintf(buffer, sizeof(buffer), "%s ",
+             convertUnixTimeToDisplayFormat(displayTime).c_str());
+    EPD_ShowStringRightAligned(790, 20, buffer, FONT_SIZE_36, BLACK);
+
+    // Refresh time (12H AM/PM or 24H HH:MM based on config)
+    String timeStr = convertUnixTimeToTimeString(displayTime);
 
     bool alertActive = enableAlertDisplay &&
                        !weatherApiResponse["alerts"].isNull() &&
                        weatherApiResponse["alerts"].size() > 0;
+    bool hasCalendar = calendarUrl.length() > 0;
 
     if (alertActive) {
+      memset(buffer, 0, sizeof(buffer));
+      snprintf(buffer, sizeof(buffer), "Updated %s", timeStr.c_str());
+      EPD_ShowStringRightAligned(785, 48, buffer, FONT_SIZE_16, BLACK);
+
       displayAlerts(270, 0);
-      displayTemperature(740, 70, false);
+      displayTemperature(740, 76, false);
     } else {
+      memset(buffer, 0, sizeof(buffer));
+      snprintf(buffer, sizeof(buffer), "Updated %s", timeStr.c_str());
+      EPD_ShowStringRightAligned(785, 50, buffer, FONT_SIZE_16, BLACK);
+
       displayTemperature(740, 105, true);
     }
 
-    // Display Google Calendar events in the left/middle area
-    displayCalendarEvents(16, 25, alertActive);
+    if (hasCalendar) {
+      // Display Google Calendar events in the left/middle area
+      displayCalendarEvents(16, 25, alertActive);
+    } else if (alertActive) {
+      // No calendar + alert active: show Today/Tomorrow summary in left column
+      displayDailySummaryColumn(16, 16);
+    } else {
+      // Default layout (no calendar, no alert): large weather icon on left
+      // and Today/Tomorrow high-low-precipitation summary in the center
+      String iconName = "icon_" + weatherInfo.icon + "_lg";
+      EPD_drawImage(0, 14, getIcon(iconName.c_str()));
+      displayDailySummaryCompact(278, 10);
+    }
 
     // Display future forecast
     drawWeatherFutureForecast(270, 160, 5);
@@ -1985,8 +2260,6 @@ private:
 
   void displayMonsterIconsTest() {
     clearScreen();
-
-    int ypos = 0;
 
     // Use safe icon retrieval for all icons
     EPD_drawImage(0, 0, getIcon("emma_cupcake_lg"));

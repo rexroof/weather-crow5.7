@@ -12,12 +12,9 @@ static ConfigManager *configManagerInstance = nullptr;
 static WiFiManager *currentWM = nullptr;
 
 ConfigManager::ConfigManager()
-    : configButtonPin(-1), paramGeoHint(nullptr), paramLatitude(nullptr),
-      paramLongitude(nullptr), paramLocationName(nullptr),
-      paramCalendarUrl(nullptr), paramRefreshMinutes(nullptr),
-      paramLowPowerMode(nullptr), paramHourInterval(nullptr),
-      paramUnits(nullptr), paramEnableAlerts(nullptr),
-      paramAlertRegion(nullptr) {
+    : configButtonPin(-1), paramLatitude(nullptr), paramLongitude(nullptr),
+      paramLocationName(nullptr), paramCalendarUrl(nullptr),
+      paramRefreshMinutes(nullptr), paramHourInterval(nullptr) {
 
   // Set default values
   config.latitude = "";
@@ -27,6 +24,7 @@ ConfigManager::ConfigManager()
   config.refreshMinutes = DEFAULT_REFRESH_MINUTES;
   config.lowPowerMode = DEFAULT_LOW_POWER_MODE;
   config.hourInterval = DEFAULT_HOUR_INTERVAL;
+  config.timeFormat = "24h";
   config.alertRegion = "auto";
   config.geoLatitude = "";
   config.geoLongitude = "";
@@ -102,11 +100,134 @@ bool ConfigManager::begin(int buttonPin) {
 }
 
 bool ConfigManager::startConfigPortal(const char *reason) {
+  // Stack-allocated custom parameters (outlive WiFiManager wm below, avoiding
+  // heap allocation and -Wdelete-non-virtual-dtor warnings).
+  String geoHintHtml;
+  if (config.hasGeoCache()) {
+    geoHintHtml = "<p><small>GeoIP cached: ";
+    if (config.geoCity.length() > 0) {
+      geoHintHtml += config.geoCity;
+      if (config.geoCountryCode.length() > 0) {
+        geoHintHtml += ", " + config.geoCountryCode;
+      }
+      geoHintHtml += " ";
+    }
+    geoHintHtml += "(" + config.geoLatitude + ", " + config.geoLongitude +
+                   "). Leave Lat/Lon blank to use GeoIP.</small></p>";
+  } else {
+    geoHintHtml =
+        "<p><small>Leave Lat/Lon blank to auto-detect location via "
+        "GeoJS.</small></p>";
+  }
+  WiFiManagerParameter geoHintParam(geoHintHtml.c_str());
+
+  WiFiManagerParameter latitudeParam(
+      "latitude", "Latitude (blank = auto GeoIP)", config.latitude.c_str(), 20);
+  WiFiManagerParameter longitudeParam(
+      "longitude", "Longitude (blank = auto GeoIP)", config.longitude.c_str(),
+      20);
+  WiFiManagerParameter locationNameParam(
+      "location", "Location Name (blank = auto GeoIP)",
+      config.locationName.c_str(), 32);
+  WiFiManagerParameter calendarUrlParam(
+      "calendar_url", "Google Script Calendar URL (optional)",
+      config.calendarUrl.c_str(), 200);
+
+  char refreshStr[8];
+  snprintf(refreshStr, sizeof(refreshStr), "%d", config.refreshMinutes);
+  WiFiManagerParameter refreshMinutesParam("refresh", "Refresh Minutes (1-60)",
+                                           refreshStr, 4,
+                                           "type='number' min='1' max='60'");
+
+  char hourStr[4];
+  snprintf(hourStr, sizeof(hourStr), "%d", config.hourInterval);
+  WiFiManagerParameter hourIntervalParam(
+      "hour_interval", "Forecast Hour Interval (1-6)", hourStr, 2,
+      "type='number' min='1' max='6'");
+
+  WiFiManagerParameter lowPowerModeParam(
+      config.lowPowerMode
+          ? "<br><label><input type='checkbox' name='low_power' value='1' "
+            "checked> Low Power Mode</label>"
+          : "<br><label><input type='checkbox' name='low_power' value='1'> Low "
+            "Power Mode</label>");
+
+  const char *unitsMetricSelected =
+      config.units == "metric"
+          ? "<br><label>Units</label><select name='units'><option "
+            "value='metric' selected>Celsius</option><option "
+            "value='imperial'>Fahrenheit</option></select>"
+          : "<br><label>Units</label><select name='units'><option "
+            "value='metric'>Celsius</option><option value='imperial' "
+            "selected>Fahrenheit</option></select>";
+  WiFiManagerParameter unitsParam(unitsMetricSelected);
+
+  const char *timeFormatSelected =
+      config.timeFormat == "12h"
+          ? "<br><label>Time Format</label><select name='time_format'><option "
+            "value='24h'>24H</option><option value='12h' selected>12H "
+            "(AM/PM)</option></select>"
+          : "<br><label>Time Format</label><select name='time_format'><option "
+            "value='24h' selected>24H</option><option value='12h'>12H "
+            "(AM/PM)</option></select>";
+  WiFiManagerParameter timeFormatParam(timeFormatSelected);
+
+  WiFiManagerParameter enableAlertsParam(
+      config.enableAlertDisplay
+          ? "<br><label><input type='checkbox' name='alerts' value='1' "
+            "checked> Show Weather Alerts</label>"
+          : "<br><label><input type='checkbox' name='alerts' value='1'> Show "
+            "Weather Alerts</label>");
+
+  String alertRegionHtml =
+      "<br><label>Alert Source</label><select name='alert_region'>";
+  const char *regionVals[] = {"auto", "US", "CA", "NO", "DE"};
+  const char *regionLabels[] = {"Auto (by location)", "US (NWS)",
+                                "Canada (ECCC)", "Norway (MET Norway)",
+                                "Germany (Bright Sky / DWD)"};
+  for (int i = 0; i < 5; i++) {
+    alertRegionHtml += "<option value='";
+    alertRegionHtml += regionVals[i];
+    alertRegionHtml += "'";
+    if (config.alertRegion == regionVals[i]) {
+      alertRegionHtml += " selected";
+    }
+    alertRegionHtml += ">";
+    alertRegionHtml += regionLabels[i];
+    alertRegionHtml += "</option>";
+  }
+  alertRegionHtml += "</select>";
+  WiFiManagerParameter alertRegionParam(alertRegionHtml.c_str());
+
+  // Expose non-owning pointers for saveParamsCallback / readWiFiManagerParams
+  paramLatitude = &latitudeParam;
+  paramLongitude = &longitudeParam;
+  paramLocationName = &locationNameParam;
+  paramCalendarUrl = &calendarUrlParam;
+  paramRefreshMinutes = &refreshMinutesParam;
+  paramHourInterval = &hourIntervalParam;
+
   WiFiManager wm;
   currentWM = &wm; // Store pointer for callback access
 
-  // Setup custom parameters
-  setupWiFiManager(wm);
+  wm.addParameter(&geoHintParam);
+  wm.addParameter(&latitudeParam);
+  wm.addParameter(&longitudeParam);
+  wm.addParameter(&locationNameParam);
+  wm.addParameter(&calendarUrlParam);
+  wm.addParameter(&refreshMinutesParam);
+  wm.addParameter(&hourIntervalParam);
+  wm.addParameter(&unitsParam);
+  wm.addParameter(&timeFormatParam);
+  wm.addParameter(&enableAlertsParam);
+  wm.addParameter(&alertRegionParam);
+  wm.addParameter(&lowPowerModeParam);
+
+  wm.setSaveParamsCallback([]() {
+    if (configManagerInstance && currentWM) {
+      configManagerInstance->saveParamsCallback(*currentWM);
+    }
+  });
 
   // Configure portal
   wm.setDebugOutput(true);
@@ -151,157 +272,14 @@ bool ConfigManager::startConfigPortal(const char *reason) {
   }
 
   currentWM = nullptr;
-
-  // Cleanup WiFiManager parameters
-  delete paramGeoHint;
-  delete paramLatitude;
-  delete paramLongitude;
-  delete paramLocationName;
-  delete paramCalendarUrl;
-  delete paramRefreshMinutes;
-  delete paramLowPowerMode;
-  delete paramHourInterval;
-  delete paramUnits;
-  delete paramEnableAlerts;
-  delete paramAlertRegion;
-
-  paramGeoHint = nullptr;
   paramLatitude = nullptr;
   paramLongitude = nullptr;
   paramLocationName = nullptr;
   paramCalendarUrl = nullptr;
   paramRefreshMinutes = nullptr;
-  paramLowPowerMode = nullptr;
   paramHourInterval = nullptr;
-  paramUnits = nullptr;
-  paramEnableAlerts = nullptr;
-  paramAlertRegion = nullptr;
 
   return result;
-}
-
-void ConfigManager::setupWiFiManager(WiFiManager &wm) {
-  // Create custom parameters
-  // Note: WiFiManager allocates char buffers, but we need to manage memory
-
-  // GeoIP status hint (shows cached GeoJS location if present)
-  if (config.hasGeoCache()) {
-    geoHintHtml = "<p><small>GeoIP cached: ";
-    if (config.geoCity.length() > 0) {
-      geoHintHtml += config.geoCity;
-      if (config.geoCountryCode.length() > 0) {
-        geoHintHtml += ", " + config.geoCountryCode;
-      }
-      geoHintHtml += " ";
-    }
-    geoHintHtml += "(" + config.geoLatitude + ", " + config.geoLongitude +
-                   "). Leave Lat/Lon blank to use GeoIP.</small></p>";
-  } else {
-    geoHintHtml =
-        "<p><small>Leave Lat/Lon blank to auto-detect location via "
-        "GeoJS.</small></p>";
-  }
-  paramGeoHint = new WiFiManagerParameter(geoHintHtml.c_str());
-
-  // Latitude (manual override; blank = auto via GeoJS)
-  paramLatitude = new WiFiManagerParameter(
-      "latitude", "Latitude (blank = auto GeoIP)", config.latitude.c_str(), 20);
-
-  // Longitude (manual override; blank = auto via GeoJS)
-  paramLongitude = new WiFiManagerParameter(
-      "longitude", "Longitude (blank = auto GeoIP)", config.longitude.c_str(),
-      20);
-
-  // Location Name (optional override; blank = GeoJS city)
-  paramLocationName = new WiFiManagerParameter(
-      "location", "Location Name (blank = auto GeoIP)",
-      config.locationName.c_str(), 32);
-
-  // Google Apps Script Calendar Web App URL
-  paramCalendarUrl = new WiFiManagerParameter(
-      "calendar_url", "Google Script Calendar URL (optional)",
-      config.calendarUrl.c_str(), 200);
-
-  // Refresh Minutes (number input)
-  char refreshStr[8];
-  snprintf(refreshStr, sizeof(refreshStr), "%d", config.refreshMinutes);
-  paramRefreshMinutes =
-      new WiFiManagerParameter("refresh", "Refresh Minutes (1-60)", refreshStr,
-                               4, "type='number' min='1' max='60'");
-
-  // Hour Interval (number input)
-  char hourStr[4];
-  snprintf(hourStr, sizeof(hourStr), "%d", config.hourInterval);
-  paramHourInterval =
-      new WiFiManagerParameter("hour_interval", "Forecast Hour Interval (1-6)",
-                               hourStr, 2, "type='number' min='1' max='6'");
-
-  // Low Power Mode (checkbox) - keep HTML minimal
-  paramLowPowerMode = new WiFiManagerParameter(
-      config.lowPowerMode
-          ? "<br><label><input type='checkbox' name='low_power' value='1' "
-            "checked> Low Power Mode</label>"
-          : "<br><label><input type='checkbox' name='low_power' value='1'> Low "
-            "Power Mode</label>");
-
-  // Units dropdown (metric/imperial) - keep HTML minimal
-  const char *unitsMetricSelected =
-      config.units == "metric"
-          ? "<br><label>Units</label><select name='units'><option "
-            "value='metric' selected>Celsius</option><option "
-            "value='imperial'>Fahrenheit</option></select>"
-          : "<br><label>Units</label><select name='units'><option "
-            "value='metric'>Celsius</option><option value='imperial' "
-            "selected>Fahrenheit</option></select>";
-  paramUnits = new WiFiManagerParameter(unitsMetricSelected);
-
-  // Enable Alert Display (checkbox) - keep HTML minimal
-  paramEnableAlerts = new WiFiManagerParameter(
-      config.enableAlertDisplay
-          ? "<br><label><input type='checkbox' name='alerts' value='1' "
-            "checked> Show Weather Alerts</label>"
-          : "<br><label><input type='checkbox' name='alerts' value='1'> Show "
-            "Weather Alerts</label>");
-
-  // Regional Alert Source dropdown
-  alertRegionHtml = "<br><label>Alert Source</label><select name='alert_region'>";
-  const char *regionVals[] = {"auto", "US", "CA", "NO", "DE"};
-  const char *regionLabels[] = {"Auto (by location)", "US (NWS)",
-                                "Canada (ECCC)", "Norway (MET Norway)",
-                                "Germany (Bright Sky / DWD)"};
-  for (int i = 0; i < 5; i++) {
-    alertRegionHtml += "<option value='";
-    alertRegionHtml += regionVals[i];
-    alertRegionHtml += "'";
-    if (config.alertRegion == regionVals[i]) {
-      alertRegionHtml += " selected";
-    }
-    alertRegionHtml += ">";
-    alertRegionHtml += regionLabels[i];
-    alertRegionHtml += "</option>";
-  }
-  alertRegionHtml += "</select>";
-  paramAlertRegion = new WiFiManagerParameter(alertRegionHtml.c_str());
-
-  // Add parameters to WiFiManager
-  wm.addParameter(paramGeoHint);
-  wm.addParameter(paramLatitude);
-  wm.addParameter(paramLongitude);
-  wm.addParameter(paramLocationName);
-  wm.addParameter(paramCalendarUrl);
-  wm.addParameter(paramRefreshMinutes);
-  wm.addParameter(paramHourInterval);
-  wm.addParameter(paramUnits);
-  wm.addParameter(paramEnableAlerts);
-  wm.addParameter(paramAlertRegion);
-  wm.addParameter(paramLowPowerMode);
-
-  // Set save callback - use currentWM to access server args
-  wm.setSaveParamsCallback([]() {
-    if (configManagerInstance && currentWM) {
-      configManagerInstance->saveParamsCallback(*currentWM);
-    }
-  });
 }
 
 void ConfigManager::saveParamsCallback(WiFiManager &wm) {
@@ -352,6 +330,14 @@ void ConfigManager::readWiFiManagerParams(WiFiManager &wm) {
       String units = wm.server->arg("units");
       if (units == "metric" || units == "imperial") {
         config.units = units;
+      }
+    }
+
+    // Time Format dropdown
+    if (wm.server->hasArg("time_format")) {
+      String fmt = wm.server->arg("time_format");
+      if (fmt == "12h" || fmt == "24h") {
+        config.timeFormat = fmt;
       }
     }
 
@@ -407,6 +393,7 @@ void ConfigManager::loadConfig() {
       preferences.getBool("low_power", DEFAULT_LOW_POWER_MODE);
   config.hourInterval = preferences.getInt("hour_int", DEFAULT_HOUR_INTERVAL);
   config.units = preferences.getString("units", "metric");
+  config.timeFormat = preferences.getString("time_fmt", "24h");
   config.enableAlertDisplay = preferences.getBool("alerts", true);
   config.alertRegion = preferences.getString("alert_region", "auto");
 
@@ -462,6 +449,7 @@ void ConfigManager::saveConfig() {
   preferences.putBool("low_power", config.lowPowerMode);
   preferences.putInt("hour_int", config.hourInterval);
   preferences.putString("units", config.units);
+  preferences.putString("time_fmt", config.timeFormat);
   preferences.putBool("alerts", config.enableAlertDisplay);
   preferences.putString("alert_region", config.alertRegion);
 
@@ -510,6 +498,7 @@ void ConfigManager::resetConfig() {
   config.lowPowerMode = DEFAULT_LOW_POWER_MODE;
   config.hourInterval = DEFAULT_HOUR_INTERVAL;
   config.units = "metric";
+  config.timeFormat = "24h";
   config.enableAlertDisplay = true;
   config.alertRegion = "auto";
   config.geoLatitude = "";

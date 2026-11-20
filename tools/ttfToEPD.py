@@ -92,7 +92,7 @@ def ttf_to_c_font(ttf_file, output_file, font_height):
         f.write(f'#ifndef {header_guard}\n')
         f.write(f'#define {header_guard}\n\n')
         f.write('#include <stdint.h>\n')
-        f.write('#include "fonts.h">\n\n')
+        f.write('#include "fonts.h"\n\n')
 
         for char_data in chars:
             f.write(f'// {char_data["char"]} (U+{char_data["code"]:04X})\n')

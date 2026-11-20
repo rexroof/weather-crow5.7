@@ -2,7 +2,7 @@
 #define FONT_8_H
 
 #include <stdint.h>
-#include "fonts.h">
+#include "fonts.h"
 
 // ! (U+0021)
 const uint8_t font_8_21[] = {
