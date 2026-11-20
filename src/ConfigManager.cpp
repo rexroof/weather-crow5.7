@@ -14,7 +14,8 @@ static WiFiManager *currentWM = nullptr;
 ConfigManager::ConfigManager()
     : configButtonPin(-1), paramLatitude(nullptr), paramLongitude(nullptr),
       paramLocationName(nullptr), paramCalendarUrl(nullptr),
-      paramRefreshMinutes(nullptr), paramHourInterval(nullptr) {
+      paramRefreshMinutes(nullptr), paramHourInterval(nullptr),
+      portalParamsSaved(false), portalKeptExistingWifi(false) {
 
   // Set default values
   config.latitude = "";
@@ -86,8 +87,8 @@ bool ConfigManager::begin(int buttonPin) {
   }
 
   if (!isConfigured()) {
-    Serial.println(
-        "[ConfigManager] No manual or cached coordinates yet - will resolve via GeoJS");
+    Serial.println("[ConfigManager] No manual or cached coordinates yet - will "
+                   "resolve via GeoJS");
   }
 
   Serial.println("[ConfigManager] WiFi connected!");
@@ -115,23 +116,22 @@ bool ConfigManager::startConfigPortal(const char *reason) {
     geoHintHtml += "(" + config.geoLatitude + ", " + config.geoLongitude +
                    "). Leave Lat/Lon blank to use GeoIP.</small></p>";
   } else {
-    geoHintHtml =
-        "<p><small>Leave Lat/Lon blank to auto-detect location via "
-        "GeoJS.</small></p>";
+    geoHintHtml = "<p><small>Leave Lat/Lon blank to auto-detect location via "
+                  "GeoJS.</small></p>";
   }
   WiFiManagerParameter geoHintParam(geoHintHtml.c_str());
 
   WiFiManagerParameter latitudeParam(
       "latitude", "Latitude (blank = auto GeoIP)", config.latitude.c_str(), 20);
-  WiFiManagerParameter longitudeParam(
-      "longitude", "Longitude (blank = auto GeoIP)", config.longitude.c_str(),
-      20);
-  WiFiManagerParameter locationNameParam(
-      "location", "Location Name (blank = auto GeoIP)",
-      config.locationName.c_str(), 32);
-  WiFiManagerParameter calendarUrlParam(
-      "calendar_url", "Google Script Calendar URL (optional)",
-      config.calendarUrl.c_str(), 200);
+  WiFiManagerParameter longitudeParam("longitude",
+                                      "Longitude (blank = auto GeoIP)",
+                                      config.longitude.c_str(), 20);
+  WiFiManagerParameter locationNameParam("location",
+                                         "Location Name (blank = auto GeoIP)",
+                                         config.locationName.c_str(), 32);
+  WiFiManagerParameter calendarUrlParam("calendar_url",
+                                        "Google Script Calendar URL (optional)",
+                                        config.calendarUrl.c_str(), 200);
 
   char refreshStr[8];
   snprintf(refreshStr, sizeof(refreshStr), "%d", config.refreshMinutes);
@@ -210,6 +210,14 @@ bool ConfigManager::startConfigPortal(const char *reason) {
   WiFiManager wm;
   currentWM = &wm; // Store pointer for callback access
 
+  // Snapshot existing persisted WiFi credentials before starting the portal so
+  // saving non-WiFi settings doesn't drop or overwrite them.
+  WiFi.mode(WIFI_STA);
+  portalSavedSsid = wm.getWiFiSSID(true);
+  portalSavedPass = wm.getWiFiPass(true);
+  portalParamsSaved = false;
+  portalKeptExistingWifi = false;
+
   wm.addParameter(&geoHintParam);
   wm.addParameter(&latitudeParam);
   wm.addParameter(&longitudeParam);
@@ -237,15 +245,30 @@ bool ConfigManager::startConfigPortal(const char *reason) {
   // Custom portal title
   wm.setTitle("Weather Crow Configuration");
 
-  // Custom message after save - modify the "Saved" text
-  wm.setCustomHeadElement("<script>"
-                          "window.onload=function(){"
-                          "var m=document.querySelector('.msg');"
-                          "if(m && m.textContent=='Saved'){"
-                          "m.innerHTML='Saved! Device is restarting...';"
-                          "}"
-                          "};"
-                          "</script>");
+  // Customize portal UI:
+  // - Rename "Configure WiFi" button to "Configure Device"
+  // - If user clicked their already-saved SSID without entering a password,
+  //   clear the SSID input on submit so WiFiManager preserves stored WiFi creds
+  // - Update save confirmation message
+  wm.setCustomHeadElement(
+      "<script>"
+      "window.onload=function(){"
+      "var b=document.querySelector(\"form[action='/wifi'] button\");"
+      "if(b){b.textContent='Configure Device';}"
+      "var f=document.querySelector(\"form[action='wifisave']\");"
+      "if(f){f.addEventListener('submit',function(){"
+      "var s=document.getElementById('s'),p=document.getElementById('p');"
+      "if(s&&p&&s.value&&s.placeholder&&s.value===s.placeholder&&!p.value){"
+      "s.value='';"
+      "}"
+      "});}"
+      "var m=document.querySelector('.msg');"
+      "if(m&&(m.textContent=='Saved'||m.textContent.indexOf('Settings "
+      "saved')!=-1)){"
+      "m.innerHTML='Saved! Applying settings...';"
+      "}"
+      "};"
+      "</script>");
 
   // Start the config portal (blocking)
   Serial.println("[ConfigManager] Starting config portal...");
@@ -267,6 +290,33 @@ bool ConfigManager::startConfigPortal(const char *reason) {
     saveConfig();
 
     Serial.println("[ConfigManager] Configuration saved");
+  } else if (portalParamsSaved && portalKeptExistingWifi &&
+             portalSavedSsid.length() > 0) {
+    // User saved device settings while leaving WiFi unchanged (greyed-out
+    // placeholders). WiFiManager skips WiFi connect when SSID is blank and
+    // returns false with breakAfterConfig=true, so reconnect with the saved
+    // credentials here (and re-persist them in case an empty pass was posted).
+    Serial.println(
+        "[ConfigManager] Parameters saved without WiFi change - reconnecting "
+        "to saved WiFi...");
+    WiFi.mode(WIFI_STA);
+    WiFi.persistent(true);
+    WiFi.begin(portalSavedSsid.c_str(), portalSavedPass.length() > 0
+                                            ? portalSavedPass.c_str()
+                                            : nullptr);
+    WiFi.persistent(false);
+
+    unsigned long startWait = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - startWait < 15000) {
+      delay(250);
+    }
+    result = (WiFi.status() == WL_CONNECTED);
+    if (result) {
+      Serial.print("[ConfigManager] Reconnected to saved WiFi: ");
+      Serial.println(WiFi.SSID());
+    } else {
+      Serial.println("[ConfigManager] Failed to reconnect to saved WiFi");
+    }
   } else {
     Serial.println("[ConfigManager] Portal timeout or cancelled");
   }
@@ -278,12 +328,27 @@ bool ConfigManager::startConfigPortal(const char *reason) {
   paramCalendarUrl = nullptr;
   paramRefreshMinutes = nullptr;
   paramHourInterval = nullptr;
+  portalSavedSsid = "";
+  portalSavedPass = "";
 
   return result;
 }
 
 void ConfigManager::saveParamsCallback(WiFiManager &wm) {
   Serial.println("[ConfigManager] Save params callback triggered");
+  portalParamsSaved = true;
+  if (wm.server) {
+    String submittedSsid = wm.server->hasArg("s") ? wm.server->arg("s") : "";
+    String submittedPass = wm.server->hasArg("p") ? wm.server->arg("p") : "";
+    submittedSsid.trim();
+    if ((submittedSsid.length() == 0 && submittedPass.length() == 0) ||
+        (portalSavedSsid.length() > 0 && submittedSsid == portalSavedSsid &&
+         submittedPass.length() == 0)) {
+      portalKeptExistingWifi = true;
+    } else {
+      portalKeptExistingWifi = false;
+    }
+  }
   readWiFiManagerParams(wm);
   saveConfig();
 }

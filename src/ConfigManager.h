@@ -125,7 +125,8 @@ public:
    */
   bool isConfigured() const;
 
-  // Effective location getters (manual override takes precedence over GeoJS cache)
+  // Effective location getters (manual override takes precedence over GeoJS
+  // cache)
   String getLatitude() const {
     return config.hasManualCoordinates() ? config.latitude : config.geoLatitude;
   }
@@ -187,6 +188,13 @@ private:
   WiFiManagerParameter *paramCalendarUrl;
   WiFiManagerParameter *paramRefreshMinutes;
   WiFiManagerParameter *paramHourInterval;
+
+  // Portal session state for preserving existing WiFi credentials on param-only
+  // saves
+  String portalSavedSsid;
+  String portalSavedPass;
+  bool portalParamsSaved;
+  bool portalKeptExistingWifi;
 
   /**
    * Check if config button is being held during boot

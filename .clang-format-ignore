@@ -1,0 +1,4 @@
+# Generated bitmap and font data files
+src/font*.cpp
+src/weatherIcons.h
+src/config.example.h

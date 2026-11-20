@@ -256,7 +256,8 @@ private:
       return true;
     }
 
-    logPrintln("Fetching location via GeoJS (https://get.geojs.io/v1/ip/geo.json)...");
+    logPrintln(
+        "Fetching location via GeoJS (https://get.geojs.io/v1/ip/geo.json)...");
     JsonDocument filter;
     filter["latitude"] = true;
     filter["longitude"] = true;
@@ -300,7 +301,8 @@ private:
 
     // Fallback to stale cache if GeoJS is temporarily unreachable
     if (configManager.hasGeoCache()) {
-      logPrintln("GeoJS lookup failed; falling back to previously cached coordinates.");
+      logPrintln("GeoJS lookup failed; falling back to previously cached "
+                 "coordinates.");
       apiParamLatitude = configManager.getGeoLatitude();
       apiParamLongitude = configManager.getGeoLongitude();
       geoCountryCode = configManager.getGeoCountryCode();
@@ -457,7 +459,8 @@ private:
   }
 
   /**
-   * Converts Unix timestamp to short time format ("3 PM" in 12h, "15:00" in 24h)
+   * Converts Unix timestamp to short time format ("3 PM" in 12h, "15:00" in
+   * 24h)
    */
   String convertUnixTimeToShortDateTimeString(long unixTime) {
     if (unixTime == 0) {
@@ -554,6 +557,7 @@ private:
            apiParamLatitude + "&longitude=" + apiParamLongitude +
            "&current=temperature_2m,relative_humidity_2m,surface_pressure,"
            "wind_speed_10m,weather_code,is_day,rain,snowfall,uv_index"
+           "&hourly=precipitation_probability,weather_code"
            "&daily=weather_code,temperature_2m_max,temperature_2m_min,"
            "precipitation_probability_max,precipitation_sum,sunrise,sunset"
            "&temperature_unit=" +
@@ -783,16 +787,21 @@ private:
     }
 
     static const char *const caZones[] = {
-        "America/Toronto",      "America/Vancouver",   "America/Edmonton",
-        "America/Winnipeg",     "America/Halifax",     "America/St_Johns",
-        "America/Regina",       "America/Moncton",     "America/Glace_Bay",
-        "America/Goose_Bay",    "America/Blanc-Sablon","America/Montreal",
-        "America/Iqaluit",      "America/Rankin_Inlet","America/Resolute",
-        "America/Cambridge_Bay","America/Yellowknife", "America/Inuvik",
-        "America/Whitehorse",   "America/Dawson",      "America/Dawson_Creek",
-        "America/Fort_Nelson",  "America/Creston",     "America/Swift_Current",
-        "America/Atikokan",     "America/Thunder_Bay", "America/Nipigon",
-        "America/Rainy_River",  "America/Pangnirtung"};
+        "America/Toronto",      "America/Vancouver",
+        "America/Edmonton",     "America/Winnipeg",
+        "America/Halifax",      "America/St_Johns",
+        "America/Regina",       "America/Moncton",
+        "America/Glace_Bay",    "America/Goose_Bay",
+        "America/Blanc-Sablon", "America/Montreal",
+        "America/Iqaluit",      "America/Rankin_Inlet",
+        "America/Resolute",     "America/Cambridge_Bay",
+        "America/Yellowknife",  "America/Inuvik",
+        "America/Whitehorse",   "America/Dawson",
+        "America/Dawson_Creek", "America/Fort_Nelson",
+        "America/Creston",      "America/Swift_Current",
+        "America/Atikokan",     "America/Thunder_Bay",
+        "America/Nipigon",      "America/Rainy_River",
+        "America/Pangnirtung"};
     for (const char *z : caZones) {
       if (tz == z)
         return "CA";
@@ -804,12 +813,12 @@ private:
       return "US";
     }
     static const char *const usZones[] = {
-        "America/New_York",  "America/Detroit",    "America/Chicago",
-        "America/Denver",    "America/Los_Angeles","America/Phoenix",
-        "America/Anchorage", "America/Juneau",     "America/Sitka",
-        "America/Metlakatla","America/Yakutat",    "America/Nome",
-        "America/Adak",      "America/Boise",      "America/Menominee",
-        "Pacific/Honolulu",  "America/Puerto_Rico"};
+        "America/New_York",   "America/Detroit",     "America/Chicago",
+        "America/Denver",     "America/Los_Angeles", "America/Phoenix",
+        "America/Anchorage",  "America/Juneau",      "America/Sitka",
+        "America/Metlakatla", "America/Yakutat",     "America/Nome",
+        "America/Adak",       "America/Boise",       "America/Menominee",
+        "Pacific/Honolulu",   "America/Puerto_Rico"};
     for (const char *z : usZones) {
       if (tz == z)
         return "US";
@@ -1023,9 +1032,9 @@ private:
    * (api.met.no/weatherapi/metalerts/2.0/current.json).
    */
   void fetchMetNoAlerts() {
-    String url =
-        "https://api.met.no/weatherapi/metalerts/2.0/current.json?lang=en&lat=" +
-        apiParamLatitude + "&lon=" + apiParamLongitude;
+    String url = "https://api.met.no/weatherapi/metalerts/2.0/"
+                 "current.json?lang=en&lat=" +
+                 apiParamLatitude + "&lon=" + apiParamLongitude;
 
     logPrint("Fetching MET Norway alerts: ");
     logPrintln(url);
@@ -1075,14 +1084,14 @@ private:
 
       JsonArray interval = feature["when"]["interval"].as<JsonArray>();
       if (!interval.isNull() && interval.size() >= 1) {
-        long startUnix = parseIso8601ToLocalUnixTime(
-            interval[0].as<String>(), utcOffset);
+        long startUnix =
+            parseIso8601ToLocalUnixTime(interval[0].as<String>(), utcOffset);
         if (startUnix > 0)
           alertObj["start"] = startUnix;
       }
       if (!interval.isNull() && interval.size() >= 2) {
-        long endUnix = parseIso8601ToLocalUnixTime(
-            interval[1].as<String>(), utcOffset);
+        long endUnix =
+            parseIso8601ToLocalUnixTime(interval[1].as<String>(), utcOffset);
         if (endUnix > 0)
           alertObj["end"] = endUnix;
       }
@@ -1153,8 +1162,8 @@ private:
       String startIso = !item["onset"].isNull()
                             ? item["onset"].as<String>()
                             : item["effective"].as<String>();
-      String endIso = !item["expires"].isNull() ? item["expires"].as<String>()
-                                                : String("");
+      String endIso =
+          !item["expires"].isNull() ? item["expires"].as<String>() : String("");
 
       long startUnix = parseIso8601ToLocalUnixTime(startIso, utcOffset);
       long endUnix = parseIso8601ToLocalUnixTime(endIso, utcOffset);
@@ -1208,8 +1217,9 @@ private:
   }
 
   /**
-   * Fetches upcoming Google Calendar events via a Google Apps Script Web App URL
-   * (script.google.com). Non-fatal: logs and continues if not configured or on error.
+   * Fetches upcoming Google Calendar events via a Google Apps Script Web App
+   * URL (script.google.com). Non-fatal: logs and continues if not configured or
+   * on error.
    */
   void fetchCalendarEvents() {
     calendarEventCount = 0;
@@ -1220,7 +1230,8 @@ private:
     logPrint("Fetching Google Calendar events: ");
     logPrintln(calendarUrl);
 
-    String calPayload = httpsGETRequest(calendarUrl.c_str(), "application/json");
+    String calPayload =
+        httpsGETRequest(calendarUrl.c_str(), "application/json");
     if (httpResponseCode != HTTP_CODE_OK) {
       logPrint("Calendar request failed with HTTP ");
       logPrintln(httpResponseCode);
@@ -1333,10 +1344,10 @@ private:
              d < daily["precipitation_sum"].size())
                 ? daily["precipitation_sum"][d].as<float>()
                 : 0.0f;
-        int dailyCode =
-            (!daily["weather_code"].isNull() && d < daily["weather_code"].size())
-                ? daily["weather_code"][d].as<int>()
-                : weatherCode;
+        int dailyCode = (!daily["weather_code"].isNull() &&
+                         d < daily["weather_code"].size())
+                            ? daily["weather_code"][d].as<int>()
+                            : weatherCode;
         dailySummary[d].weatherCode = dailyCode;
         dailySummary[d].condition = wmoCodeToWeatherMain(dailyCode);
       }
@@ -1548,10 +1559,10 @@ private:
     if (!hourly["weather_code"].isNull() &&
         hourIndex < hourly["weather_code"].size()) {
       int code = hourly["weather_code"][hourIndex].as<int>();
-      int isDay = (!hourly["is_day"].isNull() &&
-                   hourIndex < hourly["is_day"].size())
-                      ? hourly["is_day"][hourIndex].as<int>()
-                      : 1;
+      int isDay =
+          (!hourly["is_day"].isNull() && hourIndex < hourly["is_day"].size())
+              ? hourly["is_day"][hourIndex].as<int>()
+              : 1;
       icon = "icon_" + wmoCodeToIcon(code, isDay);
     }
 
@@ -1559,9 +1570,8 @@ private:
     EPD_drawImage(x + 2, y, getIcon(buffer));
 
     // Time formatting ("10 AM" / "9 PM" in 12h, or "15" / ":00" in 24h)
-    long forecastTimeInt =
-        hourly["time"][hourIndex].as<long>() +
-        weatherApiResponse["utc_offset_seconds"].as<long>();
+    long forecastTimeInt = hourly["time"][hourIndex].as<long>() +
+                           weatherApiResponse["utc_offset_seconds"].as<long>();
     String forecastTime = convertUnixTimeToShortDateTimeString(forecastTimeInt);
 
     int splitIndex = forecastTime.indexOf(' ');
@@ -2115,8 +2125,255 @@ private:
   }
 
   /**
+   * Truncates a string so its rendered width in fontSize does not exceed
+   * maxWidth pixels, appending "..." if truncated.
+   */
+  String truncateToPixelWidth(const String &str, FontSize fontSize,
+                              uint16_t maxWidth) {
+    if (EPD_GetStringWidth(str.c_str(), fontSize) <= maxWidth) {
+      return str;
+    }
+    const String ellipsis = "...";
+    uint16_t ellipsisWidth = EPD_GetStringWidth(ellipsis.c_str(), fontSize);
+    if (maxWidth <= ellipsisWidth) {
+      return ellipsis;
+    }
+    String result = str;
+    while (result.length() > 0 &&
+           EPD_GetStringWidth((result + ellipsis).c_str(), fontSize) >
+               maxWidth) {
+      result.remove(result.length() - 1);
+    }
+    result.trim();
+    return result + ellipsis;
+  }
+
+  /**
+   * Maps a WMO weather code to a human-readable precipitation type word.
+   */
+  String precipTypeFromWmoCode(int code, bool capitalized) {
+    const char *word = "rain";
+    switch (code) {
+    case 51:
+    case 53:
+    case 55:
+    case 56:
+    case 57:
+      word = "drizzle";
+      break;
+    case 66:
+    case 67:
+      word = "freezing rain";
+      break;
+    case 71:
+    case 73:
+    case 75:
+    case 77:
+    case 85:
+    case 86:
+      word = "snow";
+      break;
+    case 95:
+    case 96:
+    case 99:
+      word = "storms";
+      break;
+    default:
+      word = "rain";
+      break;
+    }
+    String s(word);
+    if (capitalized && s.length() > 0) {
+      s[0] = toupper(s[0]);
+    }
+    return s;
+  }
+
+  bool isPrecipWmoCode(int code) {
+    return (code >= 51 && code <= 86) || (code >= 95 && code <= 99);
+  }
+
+  /**
+   * Builds a concise plain-English precipitation summary using current
+   * conditions, next-24h hourly precipitation probabilities, and 5-day daily
+   * outlook.
+   */
+  String buildPrecipitationMessage() {
+    long utcOffset = weatherApiResponse["utc_offset_seconds"].as<long>();
+    int currentCode = weatherApiResponse["current"]["weather_code"] | 0;
+    float currentRain = weatherApiResponse["current"]["rain"] | 0.0f;
+    float currentSnow = weatherApiResponse["current"]["snowfall"] | 0.0f;
+    bool rainingNow = (currentRain > 0.0f) || (currentSnow > 0.0f) ||
+                      isPrecipWmoCode(currentCode);
+
+    JsonArray hTime = weatherApiResponse["hourly"]["time"].as<JsonArray>();
+    JsonArray hProb = weatherApiResponse["hourly"]["precipitation_probability"]
+                          .as<JsonArray>();
+    JsonArray hCode =
+        weatherApiResponse["hourly"]["weather_code"].as<JsonArray>();
+    size_t totalHours = (!hTime.isNull() && !hProb.isNull())
+                            ? min(hTime.size(), hProb.size())
+                            : 0;
+    size_t startIdx = (totalHours > 0) ? findCurrentHourIndex() : 0;
+
+    // 1. Currently precipitating
+    if (rainingNow) {
+      int activeCode = (currentSnow > 0.0f) ? 73 : currentCode;
+      String pTypeCap = precipTypeFromWmoCode(activeCode, true);
+      if (pTypeCap == "Snow")
+        pTypeCap = "Snowing";
+      else if (pTypeCap == "Rain")
+        pTypeCap = "Raining";
+      else if (pTypeCap == "Drizzle")
+        pTypeCap = "Drizzling";
+
+      for (size_t i = startIdx + 1; i < totalHours && i <= startIdx + 18; i++) {
+        int prob = hProb[i].as<int>();
+        int code =
+            (!hCode.isNull() && i < hCode.size()) ? hCode[i].as<int>() : 0;
+        if (prob < 30 && !isPrecipWmoCode(code)) {
+          String endTime = convertUnixTimeToShortDateTimeString(
+              hTime[i].as<long>() + utcOffset);
+          return pTypeCap + " now, easing around " + endTime;
+        }
+      }
+      return pTypeCap + " continuing into tonight";
+    }
+
+    // 2. Scan next 24 hours for upcoming precipitation (>= 30% chance)
+    size_t firstPrecipIdx = 0;
+    bool foundPrecip = false;
+    int peakProb = 0;
+    int peakCode = 61;
+    for (size_t i = startIdx + 1; i < totalHours && i <= startIdx + 24; i++) {
+      int prob = hProb[i].as<int>();
+      if (prob >= 30) {
+        if (!foundPrecip) {
+          foundPrecip = true;
+          firstPrecipIdx = i;
+        }
+        if (prob > peakProb) {
+          peakProb = prob;
+          if (!hCode.isNull() && i < hCode.size() &&
+              isPrecipWmoCode(hCode[i].as<int>())) {
+            peakCode = hCode[i].as<int>();
+          }
+        }
+      }
+    }
+
+    if (foundPrecip) {
+      String pTypeCap = precipTypeFromWmoCode(peakCode, true);
+      String pTypeLow = precipTypeFromWmoCode(peakCode, false);
+      String whenStr;
+      if (firstPrecipIdx <= startIdx + 1) {
+        whenStr = "soon";
+      } else {
+        String startStr = convertUnixTimeToShortDateTimeString(
+            hTime[firstPrecipIdx].as<long>() + utcOffset);
+        whenStr = "around " + startStr;
+      }
+
+      if (peakProb >= 70) {
+        return pTypeCap + " likely " + whenStr + " (" + String(peakProb) + "%)";
+      } else if (peakProb >= 45) {
+        return pTypeCap + " possible " + whenStr + " (" + String(peakProb) +
+               "%)";
+      } else {
+        return "Slight chance of " + pTypeLow + " " + whenStr + " (" +
+               String(peakProb) + "%)";
+      }
+    }
+
+    // 3. Dry next 24h; check Tomorrow
+    if (dailySummary[1].valid && dailySummary[1].precipProb >= 30) {
+      String pTypeLow =
+          precipTypeFromWmoCode(dailySummary[1].weatherCode, false);
+      String likelihood =
+          (dailySummary[1].precipProb >= 65) ? " likely " : " possible ";
+      return "Dry today; " + pTypeLow + likelihood + "tmrw (" +
+             String(dailySummary[1].precipProb) + "%)";
+    }
+
+    // 4. Dry through tomorrow; check days 2-4
+    for (size_t d = 2; d < DAILY_FORECAST_DAYS; d++) {
+      if (dailySummary[d].valid && dailySummary[d].precipProb >= 40) {
+        String pTypeLow =
+            precipTypeFromWmoCode(dailySummary[d].weatherCode, false);
+        String dayName = (dailySummary[d].dateTime > 0)
+                             ? convertUnixTimeToSpecifiedDateTimeString(
+                                   dailySummary[d].dateTime, "%a")
+                             : ("Day " + String(d + 1));
+        return "Dry through tmrw; " + pTypeLow + " " + dayName + " (" +
+               String(dailySummary[d].precipProb) + "%)";
+      }
+    }
+
+    return "No precipitation expected";
+  }
+
+  /**
+   * Renders the plain-English precipitation message in the bottom-left box
+   * (up to 2 word-wrapped lines in FONT_SIZE_16).
+   */
+  void displayPrecipitationMessage(uint16_t baseX, uint16_t baseY,
+                                   uint16_t maxWidth, bool drawTopDivider) {
+    String msg = buildPrecipitationMessage();
+    if (msg.length() == 0) {
+      return;
+    }
+
+    if (drawTopDivider) {
+      EPD_DrawLine(baseX, baseY - 10, baseX + maxWidth, baseY - 10, BLACK);
+    }
+
+    char buffer[STRING_BUFFER_SIZE];
+    if (EPD_GetStringWidth(msg.c_str(), FONT_SIZE_16) <= maxWidth) {
+      memset(buffer, 0, sizeof(buffer));
+      snprintf(buffer, sizeof(buffer), "%s", msg.c_str());
+      EPD_ShowString(baseX, baseY + 7, buffer, FONT_SIZE_16, BLACK, true);
+      return;
+    }
+
+    // Word-wrap into 2 lines within maxWidth
+    int splitPos = -1;
+    for (int i = 0; i < (int)msg.length(); i++) {
+      if (msg.charAt(i) == ' ') {
+        String candidate = msg.substring(0, i);
+        if (EPD_GetStringWidth(candidate.c_str(), FONT_SIZE_16) <= maxWidth) {
+          splitPos = i;
+        } else {
+          break;
+        }
+      }
+    }
+
+    String line1;
+    String line2;
+    if (splitPos > 0) {
+      line1 = msg.substring(0, splitPos);
+      line2 = msg.substring(splitPos + 1);
+      line2.trim();
+      line2 = truncateToPixelWidth(line2, FONT_SIZE_16, maxWidth);
+    } else {
+      line1 = truncateToPixelWidth(msg, FONT_SIZE_16, maxWidth);
+      line2 = "";
+    }
+
+    memset(buffer, 0, sizeof(buffer));
+    snprintf(buffer, sizeof(buffer), "%s", line1.c_str());
+    EPD_ShowString(baseX, baseY, buffer, FONT_SIZE_16, BLACK, true);
+
+    if (line2.length() > 0) {
+      memset(buffer, 0, sizeof(buffer));
+      snprintf(buffer, sizeof(buffer), "%s", line2.c_str());
+      EPD_ShowString(baseX, baseY + 15, buffer, FONT_SIZE_16, BLACK, true);
+    }
+  }
+
+  /**
    * Renders Today & Tomorrow High/Low/Precipitation summary stacked in the
-   * left column (x=16..252, y=16..260) when an alert occupies the top-center
+   * left column (x=16..252, y=12..226) when an alert occupies the top-center
    * area and no calendar URL is configured.
    */
   void displayDailySummaryColumn(uint16_t baseX, uint16_t baseY) {
@@ -2128,13 +2385,13 @@ private:
         continue;
       }
 
-      uint16_t rowTop = baseY + d * 130;
+      uint16_t rowTop = baseY + d * 108;
 
       String header = String(dayLabels[d]);
       if (dailySummary[d].condition.length() > 0) {
         header += " - " + dailySummary[d].condition;
       }
-      header = truncateString(header, 22);
+      header = truncateToPixelWidth(header, FONT_SIZE_16, 236);
       memset(buffer, 0, sizeof(buffer));
       snprintf(buffer, sizeof(buffer), "%s", header.c_str());
       EPD_ShowString(baseX, rowTop + 6, buffer, FONT_SIZE_16, BLACK, true);
@@ -2142,7 +2399,7 @@ private:
       memset(buffer, 0, sizeof(buffer));
       snprintf(buffer, sizeof(buffer), "%d / %d", dailySummary[d].tempMax,
                dailySummary[d].tempMin);
-      EPD_ShowString(baseX, rowTop + 42, buffer, FONT_SIZE_36, BLACK, true);
+      EPD_ShowString(baseX, rowTop + 38, buffer, FONT_SIZE_36, BLACK, true);
 
       String precipAmt = formatDailyPrecipAmount(dailySummary[d].precipMm);
       memset(buffer, 0, sizeof(buffer));
@@ -2153,16 +2410,15 @@ private:
         snprintf(buffer, sizeof(buffer), "Precip: %d%%",
                  dailySummary[d].precipProb);
       }
-      EPD_ShowString(baseX, rowTop + 80, buffer, FONT_SIZE_16, BLACK, true);
+      EPD_ShowString(baseX, rowTop + 72, buffer, FONT_SIZE_16, BLACK, true);
 
       if (d == 0) {
-        EPD_DrawLine(baseX, rowTop + 114, baseX + 234, rowTop + 114, BLACK);
+        EPD_DrawLine(baseX, rowTop + 94, baseX + 234, rowTop + 94, BLACK);
       }
     }
   }
 
-  void displayCalendarEvents(uint16_t baseX, uint16_t baseY,
-                             bool alertActive) {
+  void displayCalendarEvents(uint16_t baseX, uint16_t baseY, bool alertActive) {
     if (calendarUrl.length() == 0) {
       return;
     }
@@ -2173,34 +2429,49 @@ private:
 
     if (calendarEventCount == 0) {
       snprintf(buffer, sizeof(buffer), "No upcoming events");
-      EPD_ShowString(x, y, buffer, FONT_SIZE_16, BLACK, true);
+      EPD_ShowString(x, y + 20, buffer,
+                     alertActive ? FONT_SIZE_16 : FONT_SIZE_36, BLACK, true);
       return;
     }
 
-    const uint16_t rowStep = 28;
-    for (size_t i = 0; i < calendarEventCount; i++) {
-      if (y > 250) {
+    // Fewer entries (up to 4) rendered with larger FONT_SIZE_36 event titles
+    // and compact FONT_SIZE_16 date/time sub-headers.
+    const size_t maxDisplayEvents = 4;
+    const uint16_t rowStep = 56;
+    size_t count = min(calendarEventCount, maxDisplayEvents);
+
+    for (size_t i = 0; i < count; i++) {
+      uint16_t titleY = y + 24;
+      if (titleY + 14 > 232) {
         break;
       }
 
-      String line = "";
-      if (calendarEvents[i].date.length() > 0 &&
-          calendarEvents[i].date != "Today") {
-        line += calendarEvents[i].date + " ";
+      // Top rows that finish above the 5-day strip (y=152) can span across
+      // x=16..552 when no alert is active; lower rows stay in left column.
+      uint16_t maxWidth = (!alertActive && (titleY + 14) < 152) ? 536 : 242;
+
+      String meta = "";
+      if (calendarEvents[i].date.length() > 0) {
+        meta += calendarEvents[i].date;
       }
       if (calendarEvents[i].time.length() > 0) {
-        line += calendarEvents[i].time + " ";
+        if (meta.length() > 0) {
+          meta += " ";
+        }
+        meta += calendarEvents[i].time;
       }
-      line += calendarEvents[i].title;
+      if (meta.length() > 0) {
+        meta = truncateToPixelWidth(meta, FONT_SIZE_16, maxWidth);
+        memset(buffer, 0, sizeof(buffer));
+        snprintf(buffer, sizeof(buffer), "%s", meta.c_str());
+        EPD_ShowString(x, y, buffer, FONT_SIZE_16, BLACK, true);
+      }
 
-      // Top rows (y < 145) have up to x=550 available when no alert is shown;
-      // Bottom rows (y >= 145) stay left of the hourly forecast at x=270.
-      size_t maxChars = (!alertActive && y < 145) ? 44 : 23;
-      line = truncateString(line, maxChars);
-
+      String title =
+          truncateToPixelWidth(calendarEvents[i].title, FONT_SIZE_36, maxWidth);
       memset(buffer, 0, sizeof(buffer));
-      snprintf(buffer, sizeof(buffer), "%s", line.c_str());
-      EPD_ShowString(x, y, buffer, FONT_SIZE_16, BLACK, true);
+      snprintf(buffer, sizeof(buffer), "%s", title.c_str());
+      EPD_ShowString(x, titleY, buffer, FONT_SIZE_36, BLACK, true);
 
       y += rowStep;
     }
@@ -2244,17 +2515,21 @@ private:
     }
 
     if (hasCalendar) {
-      // Display Google Calendar events in the left/middle area
-      displayCalendarEvents(16, 25, alertActive);
+      // Display fewer, larger Google Calendar events in the left/middle area
+      displayCalendarEvents(16, 14, alertActive);
+      displayPrecipitationMessage(16, 248, 242, true);
     } else if (alertActive) {
       // No calendar + alert active: show Today/Tomorrow summary in left column
-      displayDailySummaryColumn(16, 16);
+      displayDailySummaryColumn(16, 12);
+      displayPrecipitationMessage(16, 248, 242, true);
     } else {
-      // Default layout (no calendar, no alert): large weather icon on left
-      // and Today/Tomorrow high-low-precipitation summary in the center
+      // Default layout (no calendar, no alert): large weather icon on left,
+      // Today/Tomorrow high-low-precipitation summary in the center, and
+      // plain-English precipitation message under the icon
       String iconName = "icon_" + weatherInfo.icon + "_lg";
-      EPD_drawImage(0, 14, getIcon(iconName.c_str()));
+      EPD_drawImage(0, 0, getIcon(iconName.c_str()));
       displayDailySummaryCompact(278, 10);
+      displayPrecipitationMessage(12, 248, 250, false);
     }
 
     // Display 5-day forecast (Today, Tomorrow, and next 3 days)
