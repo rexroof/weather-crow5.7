@@ -72,15 +72,18 @@ private:
   JsonDocument weatherApiResponse;
   bool ledState = false;
 
+  static const size_t DAILY_FORECAST_DAYS = 5;
   struct DailySummary {
     bool valid = false;
+    long dateTime = 0;
+    int weatherCode = 0;
     int tempMax = 0;
     int tempMin = 0;
     int precipProb = 0;
     float precipMm = 0.0f;
     String condition;
   };
-  DailySummary dailySummary[2]; // [0] = Today, [1] = Tomorrow
+  DailySummary dailySummary[DAILY_FORECAST_DAYS]; // [0]=Today .. [4]=+4 days
   String lastHttpDateHeader;
 
   /**
@@ -551,13 +554,12 @@ private:
            apiParamLatitude + "&longitude=" + apiParamLongitude +
            "&current=temperature_2m,relative_humidity_2m,surface_pressure,"
            "wind_speed_10m,weather_code,is_day,rain,snowfall,uv_index"
-           "&hourly=temperature_2m,weather_code,is_day"
            "&daily=weather_code,temperature_2m_max,temperature_2m_min,"
            "precipitation_probability_max,precipitation_sum,sunrise,sunset"
            "&temperature_unit=" +
            tempUnit +
            "&wind_speed_unit=ms&precipitation_unit=mm"
-           "&timeformat=unixtime&timezone=auto&forecast_days=3";
+           "&timeformat=unixtime&timezone=auto&forecast_days=5";
   }
 
   /**
@@ -1304,15 +1306,19 @@ private:
         String(weatherApiResponse["current"]["wind_speed_10m"].as<float>(), 1);
     weatherInfo.timezone = weatherApiResponse["timezone"].as<String>();
 
-    // Extract daily high/low/precipitation summary for Today [0] and Tomorrow [1]
+    // Extract 5-day daily forecast summary (Today [0] through +4 days [4])
     JsonObject daily = weatherApiResponse["daily"];
-    for (size_t d = 0; d < 2; d++) {
+    for (size_t d = 0; d < DAILY_FORECAST_DAYS; d++) {
       dailySummary[d].valid = false;
       if (!daily.isNull() && !daily["temperature_2m_max"].isNull() &&
           !daily["temperature_2m_min"].isNull() &&
           d < daily["temperature_2m_max"].size() &&
           d < daily["temperature_2m_min"].size()) {
         dailySummary[d].valid = true;
+        dailySummary[d].dateTime =
+            (!daily["time"].isNull() && d < daily["time"].size())
+                ? daily["time"][d].as<long>() + utcOffset
+                : 0;
         dailySummary[d].tempMax =
             (int)roundf(daily["temperature_2m_max"][d].as<float>());
         dailySummary[d].tempMin =
@@ -1331,6 +1337,7 @@ private:
             (!daily["weather_code"].isNull() && d < daily["weather_code"].size())
                 ? daily["weather_code"][d].as<int>()
                 : weatherCode;
+        dailySummary[d].weatherCode = dailyCode;
         dailySummary[d].condition = wmoCodeToWeatherMain(dailyCode);
       }
     }
@@ -1459,6 +1466,78 @@ private:
       }
     }
     return idx;
+  }
+
+  void drawDailyForecastItem(uint16_t x, uint16_t y, size_t dayIndex) {
+    if (dayIndex >= DAILY_FORECAST_DAYS || !dailySummary[dayIndex].valid) {
+      return;
+    }
+
+    char buffer[STRING_BUFFER_SIZE];
+    const DailySummary &day = dailySummary[dayIndex];
+
+    // Day label above icon ("Today", "Tomorrow", then weekday like "Sun")
+    String dayLabel;
+    if (dayIndex == 0) {
+      dayLabel = "Today";
+    } else if (dayIndex == 1) {
+      dayLabel = "Tomorrow";
+    } else if (day.dateTime > 0) {
+      dayLabel = convertUnixTimeToSpecifiedDateTimeString(day.dateTime, "%a");
+    } else {
+      dayLabel = "Day " + String(dayIndex + 1);
+    }
+    memset(buffer, 0, sizeof(buffer));
+    snprintf(buffer, sizeof(buffer), "%s", dayLabel.c_str());
+    EPD_ShowStringCenterAligned(x + 50, y + 4, buffer, FONT_SIZE_16, BLACK);
+
+    // Weather icon (daytime icon for daily summary)
+    String iconKey = "icon_" + wmoCodeToIcon(day.weatherCode, 1) + "_sm";
+    EPD_drawImage(x + 14, y + 8, getIcon(iconKey.c_str()));
+
+    // High temperature (36px, left of vertical bar)
+    memset(buffer, 0, sizeof(buffer));
+    snprintf(buffer, sizeof(buffer), "%d", day.tempMax);
+    EPD_ShowStringRightAligned(x + 52, y + 92, buffer, FONT_SIZE_36, BLACK);
+
+    // Vertical separator bar
+    EPD_DrawLine(x + 56, y + 78, x + 56, y + 106, BLACK);
+    EPD_DrawLine(x + 57, y + 78, x + 57, y + 106, BLACK);
+
+    // Low temperature (top-right of bar)
+    memset(buffer, 0, sizeof(buffer));
+    snprintf(buffer, sizeof(buffer), "%d", day.tempMin);
+    EPD_ShowString(x + 62, y + 84, buffer, FONT_SIZE_16, BLACK, true);
+
+    // Precipitation probability (bottom-right of bar)
+    memset(buffer, 0, sizeof(buffer));
+    snprintf(buffer, sizeof(buffer), "%d%%", day.precipProb);
+    EPD_ShowString(x + 62, y + 100, buffer, FONT_SIZE_16, BLACK, true);
+  }
+
+  void drawDailyForecast(uint16_t baseX, uint16_t baseY, uint16_t length) {
+    char buffer[STRING_BUFFER_SIZE];
+    uint16_t daysToShow = min(length, (uint16_t)DAILY_FORECAST_DAYS);
+    bool anyValid = false;
+    for (uint16_t i = 0; i < daysToShow; i++) {
+      if (dailySummary[i].valid) {
+        anyValid = true;
+        break;
+      }
+    }
+    if (!anyValid) {
+      memset(buffer, 0, sizeof(buffer));
+      snprintf(buffer, sizeof(buffer), "%s",
+               "Error: API not responding with daily forecast data.");
+      EPD_ShowString(baseX, baseY + 60, buffer, FONT_SIZE_16, BLACK, true);
+      return;
+    }
+
+    uint16_t x = baseX;
+    for (uint16_t i = 0; i < daysToShow; i++) {
+      drawDailyForecastItem(x, baseY, i);
+      x += 104;
+    }
   }
 
   void drawForecastItem(uint16_t x, uint16_t y, size_t hourIndex) {
@@ -2178,8 +2257,8 @@ private:
       displayDailySummaryCompact(278, 10);
     }
 
-    // Display future forecast
-    drawWeatherFutureForecast(270, 160, 5);
+    // Display 5-day forecast (Today, Tomorrow, and next 3 days)
+    drawDailyForecast(270, 158, DAILY_FORECAST_DAYS);
 
     // clock frequency is reduced to 80MHz to save power
     if (lowPowerMode) {
