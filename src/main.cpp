@@ -30,7 +30,8 @@
 ConfigManager configManager;
 
 // Forward declarations for display functions used by config portal
-void displayConfigPortalScreen(const char *apName, const char *ipAddress);
+void displayConfigPortalScreen(const char *apName, const char *ipAddress,
+                               const char *reason);
 
 // Display buffer for config screen (shared with WeatherCrow)
 uint8_t configImageBW[27200];
@@ -44,17 +45,30 @@ private:
   String apiParamLatitude;
   String apiParamLongitude;
   String locationName;
-  int refreshMinutes;
-  int hourInterval;
-  bool lowPowerMode;
-  String units;
-  bool enableAlertDisplay;
+  String calendarUrl;
+  int refreshMinutes = DEFAULT_REFRESH_MINUTES;
+  int hourInterval = DEFAULT_HOUR_INTERVAL;
+  bool lowPowerMode = DEFAULT_LOW_POWER_MODE;
+  String units = "metric";
+  bool enableAlertDisplay = true;
+  String alertRegion = "auto";
+  String geoCountryCode;
+  bool usingManualCoordinates = false;
+
+  static const size_t MAX_CALENDAR_EVENTS = 8;
+  struct CalendarEvent {
+    String date;
+    String time;
+    String title;
+  };
+  CalendarEvent calendarEvents[MAX_CALENDAR_EVENTS];
+  size_t calendarEventCount = 0;
 
   // Data buffers
   String jsonBuffer;
   String errorMessageBuffer;
   int httpResponseCode = HTTP_NOT_REQUESTED_YET;
-  DynamicJsonDocument weatherApiResponse = DynamicJsonDocument(JSON_CAPACITY);
+  JsonDocument weatherApiResponse;
   bool ledState = false;
 
   /**
@@ -92,9 +106,10 @@ private:
     WiFiClientSecure client;
     HTTPClient http;
     client.setInsecure();
+    http.setTimeout(10000);
     http.setUserAgent(
         "WeatherCrow/1.0 (https://github.com/kotamorishi/weather-crow5.7)");
-    http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+    http.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
     http.begin(client, serverName);
     if (acceptHeader != nullptr) {
       http.addHeader("Accept", acceptHeader);
@@ -109,28 +124,173 @@ private:
   }
 
   /**
+   * Performs HTTPS GET request and streams JSON directly into outDoc with an
+   * optional ArduinoJson filter (uses HTTP/1.0 to avoid chunked framing).
+   * Saves RAM on large GeoJSON responses by skipping unused geometry fields.
+   */
+  bool httpsGETJsonFiltered(const char *serverName, const JsonDocument *filter,
+                            JsonDocument &outDoc,
+                            const char *acceptHeader = nullptr) {
+    WiFiClientSecure client;
+    HTTPClient http;
+    client.setInsecure();
+    http.useHTTP10(true);
+    http.setTimeout(10000);
+    http.setUserAgent(
+        "WeatherCrow/1.0 (https://github.com/kotamorishi/weather-crow5.7)");
+    http.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
+    http.begin(client, serverName);
+    if (acceptHeader != nullptr) {
+      http.addHeader("Accept", acceptHeader);
+    }
+
+    httpResponseCode = http.GET();
+    if (httpResponseCode != HTTP_CODE_OK) {
+      http.end();
+      return false;
+    }
+
+    DeserializationError err =
+        (filter != nullptr)
+            ? deserializeJson(outDoc, http.getStream(),
+                              DeserializationOption::Filter(*filter))
+            : deserializeJson(outDoc, http.getStream());
+    http.end();
+
+    if (err) {
+      logPrint("JSON stream parse error: ");
+      logPrintln(err.c_str());
+      return false;
+    }
+    return true;
+  }
+
+  /**
    * Load configuration from ConfigManager
    */
   void loadConfiguration() {
+    usingManualCoordinates = configManager.hasManualCoordinates();
     apiParamLatitude = configManager.getLatitude();
     apiParamLongitude = configManager.getLongitude();
     locationName = configManager.getLocationName();
+    geoCountryCode = configManager.getGeoCountryCode();
+    calendarUrl = configManager.getCalendarUrl();
     refreshMinutes = configManager.getRefreshMinutes();
     hourInterval = configManager.getHourInterval();
     lowPowerMode = configManager.getLowPowerMode();
     units = configManager.getUnits();
     enableAlertDisplay = configManager.getEnableAlertDisplay();
+    alertRegion = configManager.getAlertRegion();
 
     logPrintln("Configuration loaded:");
     logPrint("  Location: ");
     logPrintln(locationName);
-    logPrint("  Coordinates: ");
+    logPrint("  Coordinates (");
+    logPrint(usingManualCoordinates ? "manual" : "auto/GeoIP");
+    logPrint("): ");
     logPrint(apiParamLatitude);
     logPrint(", ");
     logPrintln(apiParamLongitude);
+    logPrint("  Alert Region: ");
+    logPrintln(alertRegion);
+    logPrint("  Calendar URL: ");
+    logPrintln(calendarUrl.length() > 0 ? "(set)" : "(not set)");
     logPrint("  Refresh: ");
     logPrint(refreshMinutes);
     logPrintln(" minutes");
+  }
+
+  /**
+   * Resolves coordinates via GeoJS (https://get.geojs.io/v1/ip/geo.json) when
+   * manual latitude/longitude are not configured. Results are cached in NVS
+   * per WiFi SSID so deep-sleep wakes avoid redundant network calls.
+   * Manual coordinates in the config portal always override GeoJS.
+   */
+  bool resolveLocationWithGeoIp() {
+    if (usingManualCoordinates) {
+      logPrintln("Using manual coordinates override from config portal.");
+      return true;
+    }
+
+    String currentSsid = WiFi.SSID();
+    if (configManager.hasGeoCache() &&
+        configManager.getGeoSsid() == currentSsid) {
+      apiParamLatitude = configManager.getGeoLatitude();
+      apiParamLongitude = configManager.getGeoLongitude();
+      geoCountryCode = configManager.getGeoCountryCode();
+      if (locationName.length() == 0) {
+        locationName = configManager.getGeoCity();
+      }
+      logPrint("Using cached GeoJS location: ");
+      logPrint(locationName);
+      logPrint(", ");
+      logPrint(geoCountryCode);
+      logPrint(" (");
+      logPrint(apiParamLatitude);
+      logPrint(", ");
+      logPrint(apiParamLongitude);
+      logPrintln(")");
+      return true;
+    }
+
+    logPrintln("Fetching location via GeoJS (https://get.geojs.io/v1/ip/geo.json)...");
+    JsonDocument filter;
+    filter["latitude"] = true;
+    filter["longitude"] = true;
+    filter["city"] = true;
+    filter["country_code"] = true;
+
+    JsonDocument geoDoc;
+    bool ok = httpsGETJsonFiltered("https://get.geojs.io/v1/ip/geo.json",
+                                   &filter, geoDoc, "application/json");
+    if (ok) {
+      String lat = geoDoc["latitude"] | "";
+      String lon = geoDoc["longitude"] | "";
+      String city = geoDoc["city"] | "";
+      String cc = geoDoc["country_code"] | "";
+      lat.trim();
+      lon.trim();
+      city.trim();
+      cc.trim();
+      cc.toUpperCase();
+
+      if (lat.length() > 0 && lon.length() > 0) {
+        configManager.saveGeoIpCache(lat, lon, city, cc, currentSsid);
+        apiParamLatitude = lat;
+        apiParamLongitude = lon;
+        geoCountryCode = cc;
+        if (locationName.length() == 0) {
+          locationName = city;
+        }
+        logPrint("GeoJS resolved & cached: ");
+        logPrint(city);
+        logPrint(", ");
+        logPrint(cc);
+        logPrint(" (");
+        logPrint(lat);
+        logPrint(", ");
+        logPrint(lon);
+        logPrintln(")");
+        return true;
+      }
+    }
+
+    // Fallback to stale cache if GeoJS is temporarily unreachable
+    if (configManager.hasGeoCache()) {
+      logPrintln("GeoJS lookup failed; falling back to previously cached coordinates.");
+      apiParamLatitude = configManager.getGeoLatitude();
+      apiParamLongitude = configManager.getGeoLongitude();
+      geoCountryCode = configManager.getGeoCountryCode();
+      if (locationName.length() == 0) {
+        locationName = configManager.getGeoCity();
+      }
+      return true;
+    }
+
+    errorMessageBuffer =
+        "Auto location lookup (GeoJS) failed. Hold config button on boot to "
+        "enter latitude/longitude manually.";
+    return false;
   }
 
   void screenPowerOn() {
@@ -480,8 +640,9 @@ private:
   }
 
   /**
-   * Parses an ISO-8601 timestamp string (e.g., "2026-11-04T22:00:00-05:00")
-   * into a local Unix timestamp adjusted by localUtcOffsetSeconds.
+   * Parses an ISO-8601 timestamp string (e.g., "2026-11-04T22:00:00-05:00" or
+   * "2026-11-20T23:00:00.000Z") into a local Unix timestamp adjusted by
+   * localUtcOffsetSeconds.
    */
   long parseIso8601ToLocalUnixTime(const String &isoStr,
                                    long localUtcOffsetSeconds) {
@@ -502,11 +663,18 @@ private:
     long timestamp = days * 86400L + hh * 3600L + mm * 60L + ss;
 
     long isoOffsetSeconds = 0;
-    if (isoStr.length() >= 25) {
-      char sign = isoStr.charAt(19);
-      if (sign == '+' || sign == '-') {
+    size_t tzPos = 19;
+    if (tzPos < isoStr.length() && isoStr.charAt(tzPos) == '.') {
+      tzPos++;
+      while (tzPos < isoStr.length() && isDigit(isoStr.charAt(tzPos))) {
+        tzPos++;
+      }
+    }
+    if (tzPos < isoStr.length()) {
+      char sign = isoStr.charAt(tzPos);
+      if ((sign == '+' || sign == '-') && tzPos + 5 < isoStr.length()) {
         int offH = 0, offM = 0;
-        if (sscanf(isoStr.c_str() + 20, "%d:%d", &offH, &offM) == 2) {
+        if (sscanf(isoStr.c_str() + tzPos + 1, "%d:%d", &offH, &offM) == 2) {
           isoOffsetSeconds =
               (offH * 3600L + offM * 60L) * (sign == '-' ? -1L : 1L);
         }
@@ -517,29 +685,99 @@ private:
   }
 
   /**
-   * Fetches active weather alerts from the US National Weather Service API
-   * (api.weather.gov) and normalizes them into weatherApiResponse["alerts"].
-   * Non-fatal: if location is outside the US or request fails, logs and
-   * continues without alerts.
+   * Infers a supported alert country code ("US", "CA", "NO", "DE") from the
+   * IANA timezone string returned by Open-Meteo for the requested coordinates.
    */
-  void fetchNwsAlerts() {
-    if (!enableAlertDisplay || WiFi.status() != WL_CONNECTED) {
-      return;
+  String inferAlertRegionFromTimezone(const String &tz) {
+    if (tz == "Europe/Oslo" || tz == "Arctic/Longyearbyen") {
+      return "NO";
+    }
+    if (tz == "Europe/Berlin" || tz == "Europe/Busingen") {
+      return "DE";
     }
 
+    static const char *const caZones[] = {
+        "America/Toronto",      "America/Vancouver",   "America/Edmonton",
+        "America/Winnipeg",     "America/Halifax",     "America/St_Johns",
+        "America/Regina",       "America/Moncton",     "America/Glace_Bay",
+        "America/Goose_Bay",    "America/Blanc-Sablon","America/Montreal",
+        "America/Iqaluit",      "America/Rankin_Inlet","America/Resolute",
+        "America/Cambridge_Bay","America/Yellowknife", "America/Inuvik",
+        "America/Whitehorse",   "America/Dawson",      "America/Dawson_Creek",
+        "America/Fort_Nelson",  "America/Creston",     "America/Swift_Current",
+        "America/Atikokan",     "America/Thunder_Bay", "America/Nipigon",
+        "America/Rainy_River",  "America/Pangnirtung"};
+    for (const char *z : caZones) {
+      if (tz == z)
+        return "CA";
+    }
+
+    if (tz.startsWith("America/Indiana/") ||
+        tz.startsWith("America/Kentucky/") ||
+        tz.startsWith("America/North_Dakota/")) {
+      return "US";
+    }
+    static const char *const usZones[] = {
+        "America/New_York",  "America/Detroit",    "America/Chicago",
+        "America/Denver",    "America/Los_Angeles","America/Phoenix",
+        "America/Anchorage", "America/Juneau",     "America/Sitka",
+        "America/Metlakatla","America/Yakutat",    "America/Nome",
+        "America/Adak",      "America/Boise",      "America/Menominee",
+        "Pacific/Honolulu",  "America/Puerto_Rico"};
+    for (const char *z : usZones) {
+      if (tz == z)
+        return "US";
+    }
+
+    return "";
+  }
+
+  /**
+   * Resolves which regional alert provider to query ("US", "CA", "NO", "DE",
+   * or "" if no supported provider matches).
+   */
+  String resolveAlertRegion() {
+    if (alertRegion.length() > 0 && alertRegion != "auto") {
+      return alertRegion;
+    }
+
+    // When using GeoJS coordinates directly, trust GeoJS country_code first
+    if (!usingManualCoordinates && geoCountryCode.length() == 2) {
+      return geoCountryCode;
+    }
+
+    // For manual coordinates (e.g., testing another country or VPN), infer
+    // from Open-Meteo's coordinate-based timezone first
+    String tzRegion = inferAlertRegionFromTimezone(weatherInfo.timezone);
+    if (tzRegion.length() == 2) {
+      return tzRegion;
+    }
+
+    // Fallback to cached GeoJS country code if manual coordinates are nearby
+    if (geoCountryCode.length() == 2 && configManager.hasGeoCache()) {
+      float dLat = fabsf(apiParamLatitude.toFloat() -
+                         configManager.getGeoLatitude().toFloat());
+      float dLon = fabsf(apiParamLongitude.toFloat() -
+                         configManager.getGeoLongitude().toFloat());
+      if (dLat < 1.5f && dLon < 1.5f) {
+        return geoCountryCode;
+      }
+    }
+
+    return "";
+  }
+
+  /**
+   * Fetches active weather alerts from the US National Weather Service API
+   * (api.weather.gov) and normalizes them into weatherApiResponse["alerts"].
+   */
+  void fetchNwsAlerts() {
     String nwsUrl = "https://api.weather.gov/alerts/active?point=" +
                     formatCoordForNws(apiParamLatitude) + "," +
                     formatCoordForNws(apiParamLongitude);
 
-    logPrint("Fetching NWS alerts: ");
+    logPrint("Fetching US NWS alerts: ");
     logPrintln(nwsUrl);
-
-    String nwsPayload = httpsGETRequest(nwsUrl.c_str(), "application/geo+json");
-    if (httpResponseCode != HTTP_CODE_OK) {
-      logPrint("NWS alerts request returned HTTP ");
-      logPrintln(httpResponseCode);
-      return;
-    }
 
     JsonDocument filter;
     JsonObject propsFilter =
@@ -554,17 +792,17 @@ private:
     propsFilter["headline"] = true;
 
     JsonDocument nwsDoc;
-    DeserializationError err = deserializeJson(
-        nwsDoc, nwsPayload, DeserializationOption::Filter(filter));
-    if (err) {
-      logPrint("NWS JSON parse error: ");
-      logPrintln(err.c_str());
+    if (!httpsGETJsonFiltered(nwsUrl.c_str(), &filter, nwsDoc,
+                              "application/geo+json")) {
+      logPrint("NWS alerts fetch/parse failed (HTTP ");
+      logPrint(httpResponseCode);
+      logPrintln(")");
       return;
     }
 
     JsonArray features = nwsDoc["features"].as<JsonArray>();
     if (features.isNull() || features.size() == 0) {
-      logPrintln("No active NWS weather alerts.");
+      logPrintln("No active US NWS weather alerts.");
       return;
     }
 
@@ -599,8 +837,338 @@ private:
       alertObj["description"] = desc;
     }
 
-    logPrint("Loaded NWS alerts count: ");
+    logPrint("Loaded US NWS alerts count: ");
     logPrintln((int)alertsArray.size());
+  }
+
+  /**
+   * Fetches active weather alerts from Environment and Climate Change Canada
+   * (api.weather.gc.ca) using a point bounding box and skipGeometry=true.
+   */
+  void fetchEcccAlerts() {
+    float lat = apiParamLatitude.toFloat();
+    float lon = apiParamLongitude.toFloat();
+    const float delta = 0.01f;
+    char bboxBuf[64];
+    snprintf(bboxBuf, sizeof(bboxBuf), "%.4f,%.4f,%.4f,%.4f", lon - delta,
+             lat - delta, lon + delta, lat + delta);
+
+    String url =
+        "https://api.weather.gc.ca/collections/weather-alerts/items?f=json"
+        "&skipGeometry=true&limit=5&bbox=" +
+        String(bboxBuf);
+
+    logPrint("Fetching Canada ECCC alerts: ");
+    logPrintln(url);
+
+    JsonDocument filter;
+    JsonObject propsFilter =
+        filter["features"][0]["properties"].to<JsonObject>();
+    propsFilter["alert_name_en"] = true;
+    propsFilter["alert_short_name_en"] = true;
+    propsFilter["status_en"] = true;
+    propsFilter["publication_datetime"] = true;
+    propsFilter["validity_datetime"] = true;
+    propsFilter["event_end_datetime"] = true;
+    propsFilter["expiration_datetime"] = true;
+    propsFilter["alert_text_en"] = true;
+
+    JsonDocument doc;
+    if (!httpsGETJsonFiltered(url.c_str(), &filter, doc, "application/json")) {
+      logPrint("ECCC alerts fetch/parse failed (HTTP ");
+      logPrint(httpResponseCode);
+      logPrintln(")");
+      return;
+    }
+
+    JsonArray features = doc["features"].as<JsonArray>();
+    if (features.isNull() || features.size() == 0) {
+      logPrintln("No active Canada ECCC weather alerts.");
+      return;
+    }
+
+    long utcOffset = weatherApiResponse["utc_offset_seconds"].as<long>();
+    JsonArray alertsArray = weatherApiResponse["alerts"].to<JsonArray>();
+
+    for (JsonObject feature : features) {
+      JsonObject props = feature["properties"];
+      if (props.isNull())
+        continue;
+
+      String status = props["status_en"] | "";
+      status.toLowerCase();
+      if (status == "ended")
+        continue;
+
+      JsonObject alertObj = alertsArray.add<JsonObject>();
+      String eventName = !props["alert_name_en"].isNull()
+                             ? props["alert_name_en"].as<String>()
+                             : (props["alert_short_name_en"] | "Weather Alert");
+      alertObj["event"] = eventName;
+      alertObj["sender_name"] = "Environment Canada";
+
+      String startIso = !props["validity_datetime"].isNull()
+                            ? props["validity_datetime"].as<String>()
+                            : props["publication_datetime"].as<String>();
+      String endIso = !props["event_end_datetime"].isNull()
+                          ? props["event_end_datetime"].as<String>()
+                          : props["expiration_datetime"].as<String>();
+
+      long startUnix = parseIso8601ToLocalUnixTime(startIso, utcOffset);
+      long endUnix = parseIso8601ToLocalUnixTime(endIso, utcOffset);
+      if (startUnix > 0)
+        alertObj["start"] = startUnix;
+      if (endUnix > 0)
+        alertObj["end"] = endUnix;
+
+      alertObj["description"] = props["alert_text_en"] | "";
+    }
+
+    if (alertsArray.size() == 0) {
+      weatherApiResponse.remove("alerts");
+    }
+
+    logPrint("Loaded Canada ECCC alerts count: ");
+    logPrintln((int)alertsArray.size());
+  }
+
+  /**
+   * Fetches active weather alerts from MET Norway MetAlerts 2.0
+   * (api.met.no/weatherapi/metalerts/2.0/current.json).
+   */
+  void fetchMetNoAlerts() {
+    String url =
+        "https://api.met.no/weatherapi/metalerts/2.0/current.json?lang=en&lat=" +
+        apiParamLatitude + "&lon=" + apiParamLongitude;
+
+    logPrint("Fetching MET Norway alerts: ");
+    logPrintln(url);
+
+    JsonDocument filter;
+    JsonObject propsFilter =
+        filter["features"][0]["properties"].to<JsonObject>();
+    propsFilter["event"] = true;
+    propsFilter["eventAwarenessName"] = true;
+    propsFilter["description"] = true;
+    propsFilter["title"] = true;
+    propsFilter["status"] = true;
+    filter["features"][0]["when"]["interval"] = true;
+
+    JsonDocument doc;
+    if (!httpsGETJsonFiltered(url.c_str(), &filter, doc, "application/json")) {
+      logPrint("MET Norway alerts fetch/parse failed (HTTP ");
+      logPrint(httpResponseCode);
+      logPrintln(")");
+      return;
+    }
+
+    JsonArray features = doc["features"].as<JsonArray>();
+    if (features.isNull() || features.size() == 0) {
+      logPrintln("No active MET Norway weather alerts.");
+      return;
+    }
+
+    long utcOffset = weatherApiResponse["utc_offset_seconds"].as<long>();
+    JsonArray alertsArray = weatherApiResponse["alerts"].to<JsonArray>();
+
+    for (JsonObject feature : features) {
+      JsonObject props = feature["properties"];
+      if (props.isNull())
+        continue;
+
+      String status = props["status"] | "Actual";
+      if (status.length() > 0 && status != "Actual")
+        continue;
+
+      JsonObject alertObj = alertsArray.add<JsonObject>();
+      String eventName = !props["eventAwarenessName"].isNull()
+                             ? props["eventAwarenessName"].as<String>()
+                             : (props["event"] | "Weather Alert");
+      alertObj["event"] = eventName;
+      alertObj["sender_name"] = "MET Norway";
+
+      JsonArray interval = feature["when"]["interval"].as<JsonArray>();
+      if (!interval.isNull() && interval.size() >= 1) {
+        long startUnix = parseIso8601ToLocalUnixTime(
+            interval[0].as<String>(), utcOffset);
+        if (startUnix > 0)
+          alertObj["start"] = startUnix;
+      }
+      if (!interval.isNull() && interval.size() >= 2) {
+        long endUnix = parseIso8601ToLocalUnixTime(
+            interval[1].as<String>(), utcOffset);
+        if (endUnix > 0)
+          alertObj["end"] = endUnix;
+      }
+
+      String desc = !props["description"].isNull()
+                        ? props["description"].as<String>()
+                        : (props["title"] | "");
+      alertObj["description"] = desc;
+    }
+
+    if (alertsArray.size() == 0) {
+      weatherApiResponse.remove("alerts");
+    }
+
+    logPrint("Loaded MET Norway alerts count: ");
+    logPrintln((int)alertsArray.size());
+  }
+
+  /**
+   * Fetches active German DWD weather alerts via Bright Sky
+   * (api.brightsky.dev/alerts).
+   */
+  void fetchBrightSkyAlerts() {
+    String url = "https://api.brightsky.dev/alerts?lat=" + apiParamLatitude +
+                 "&lon=" + apiParamLongitude;
+
+    logPrint("Fetching Bright Sky (DWD) alerts: ");
+    logPrintln(url);
+
+    JsonDocument filter;
+    JsonObject alertFilter = filter["alerts"][0].to<JsonObject>();
+    alertFilter["event_en"] = true;
+    alertFilter["event_de"] = true;
+    alertFilter["headline_en"] = true;
+    alertFilter["headline_de"] = true;
+    alertFilter["description_en"] = true;
+    alertFilter["description_de"] = true;
+    alertFilter["onset"] = true;
+    alertFilter["effective"] = true;
+    alertFilter["expires"] = true;
+
+    JsonDocument doc;
+    if (!httpsGETJsonFiltered(url.c_str(), &filter, doc, "application/json")) {
+      logPrint("Bright Sky alerts fetch/parse failed (HTTP ");
+      logPrint(httpResponseCode);
+      logPrintln(")");
+      return;
+    }
+
+    JsonArray alerts = doc["alerts"].as<JsonArray>();
+    if (alerts.isNull() || alerts.size() == 0) {
+      logPrintln("No active Bright Sky (DWD) weather alerts.");
+      return;
+    }
+
+    long utcOffset = weatherApiResponse["utc_offset_seconds"].as<long>();
+    JsonArray alertsArray = weatherApiResponse["alerts"].to<JsonArray>();
+
+    for (JsonObject item : alerts) {
+      JsonObject alertObj = alertsArray.add<JsonObject>();
+
+      String eventName = !item["event_en"].isNull()
+                             ? item["event_en"].as<String>()
+                             : (item["event_de"] | "Weather Alert");
+      alertObj["event"] = eventName;
+      alertObj["sender_name"] = "DWD";
+
+      String startIso = !item["onset"].isNull()
+                            ? item["onset"].as<String>()
+                            : item["effective"].as<String>();
+      String endIso = !item["expires"].isNull() ? item["expires"].as<String>()
+                                                : String("");
+
+      long startUnix = parseIso8601ToLocalUnixTime(startIso, utcOffset);
+      long endUnix = parseIso8601ToLocalUnixTime(endIso, utcOffset);
+      if (startUnix > 0)
+        alertObj["start"] = startUnix;
+      if (endUnix > 0)
+        alertObj["end"] = endUnix;
+
+      String desc = "";
+      if (!item["description_en"].isNull()) {
+        desc = item["description_en"].as<String>();
+      } else if (!item["headline_en"].isNull()) {
+        desc = item["headline_en"].as<String>();
+      } else if (!item["description_de"].isNull()) {
+        desc = item["description_de"].as<String>();
+      } else if (!item["headline_de"].isNull()) {
+        desc = item["headline_de"].as<String>();
+      }
+      alertObj["description"] = desc;
+    }
+
+    logPrint("Loaded Bright Sky (DWD) alerts count: ");
+    logPrintln((int)alertsArray.size());
+  }
+
+  /**
+   * Dispatches regional weather alert fetching based on configured or
+   * auto-detected region (US NWS, Canada ECCC, Norway MET, Germany DWD).
+   * Non-fatal: logs and continues without alerts on unsupported region/errors.
+   */
+  void fetchRegionalAlerts() {
+    if (!enableAlertDisplay || WiFi.status() != WL_CONNECTED) {
+      return;
+    }
+
+    String region = resolveAlertRegion();
+    logPrint("Resolved alert region: ");
+    logPrintln(region.length() > 0 ? region : "(none)");
+
+    if (region == "US") {
+      fetchNwsAlerts();
+    } else if (region == "CA") {
+      fetchEcccAlerts();
+    } else if (region == "NO") {
+      fetchMetNoAlerts();
+    } else if (region == "DE") {
+      fetchBrightSkyAlerts();
+    } else {
+      logPrintln("No regional alert provider configured for this location.");
+    }
+  }
+
+  /**
+   * Fetches upcoming Google Calendar events via a Google Apps Script Web App URL
+   * (script.google.com). Non-fatal: logs and continues if not configured or on error.
+   */
+  void fetchCalendarEvents() {
+    calendarEventCount = 0;
+    if (calendarUrl.length() == 0 || WiFi.status() != WL_CONNECTED) {
+      return;
+    }
+
+    logPrint("Fetching Google Calendar events: ");
+    logPrintln(calendarUrl);
+
+    String calPayload = httpsGETRequest(calendarUrl.c_str(), "application/json");
+    if (httpResponseCode != HTTP_CODE_OK) {
+      logPrint("Calendar request failed with HTTP ");
+      logPrintln(httpResponseCode);
+      return;
+    }
+
+    JsonDocument calDoc;
+    DeserializationError err = deserializeJson(calDoc, calPayload);
+    if (err) {
+      logPrint("Calendar JSON parse error: ");
+      logPrintln(err.c_str());
+      return;
+    }
+
+    JsonArray events = calDoc["events"].isNull()
+                           ? calDoc.as<JsonArray>()
+                           : calDoc["events"].as<JsonArray>();
+    if (events.isNull()) {
+      logPrintln("No events array in calendar response.");
+      return;
+    }
+
+    for (JsonObject ev : events) {
+      if (calendarEventCount >= MAX_CALENDAR_EVENTS) {
+        break;
+      }
+      calendarEvents[calendarEventCount].date = ev["date"] | "";
+      calendarEvents[calendarEventCount].time = ev["time"] | "";
+      calendarEvents[calendarEventCount].title = ev["title"] | "(No title)";
+      calendarEventCount++;
+    }
+
+    logPrint("Loaded calendar events count: ");
+    logPrintln((int)calendarEventCount);
   }
 
   void setRTC(long unixTime) {
@@ -690,21 +1258,12 @@ private:
       // Construct API endpoint URL and make request
       String apiEndPoint = constructApiEndpointUrl();
       jsonBuffer = httpsGETRequest(apiEndPoint.c_str());
-
-      // Wait for response to complete
-      // Add timeout to prevent infinite loop
-      const unsigned long HTTP_TIMEOUT_MS =
-          5000; // Match HTTP timeout (5 seconds)
-      unsigned long startTime = millis();
-      while (httpResponseCode < 0 && (millis() - startTime) < HTTP_TIMEOUT_MS) {
-        delay(500);
-        ledToggle();
-      }
       ledOn();
 
-      // Check if timeout occurred or non-success status code
+      // Check if connection error or timeout occurred
       if (httpResponseCode < 0) {
-        logPrintln("HTTP request timed out.");
+        logPrint("HTTP request failed with error code: ");
+        logPrintln(httpResponseCode);
         currentRetry++;
         continue;
       }
@@ -746,8 +1305,10 @@ private:
         continue;
       }
 
-      // Fetch NWS weather alerts while WiFi is still active
-      fetchNwsAlerts();
+      // Fetch regional weather alerts and Google Calendar events while WiFi is
+      // active
+      fetchRegionalAlerts();
+      fetchCalendarEvents();
 
       if (lowPowerMode) {
         // Turn off wireless as soon as possible.
@@ -1272,6 +1833,51 @@ private:
     }
   }
 
+  void displayCalendarEvents(uint16_t baseX, uint16_t baseY,
+                             bool alertActive) {
+    if (calendarUrl.length() == 0) {
+      return;
+    }
+
+    char buffer[STRING_BUFFER_SIZE];
+    uint16_t x = baseX;
+    uint16_t y = baseY;
+
+    if (calendarEventCount == 0) {
+      snprintf(buffer, sizeof(buffer), "No upcoming events");
+      EPD_ShowString(x, y, buffer, FONT_SIZE_16, BLACK, true);
+      return;
+    }
+
+    const uint16_t rowStep = 28;
+    for (size_t i = 0; i < calendarEventCount; i++) {
+      if (y > 250) {
+        break;
+      }
+
+      String line = "";
+      if (calendarEvents[i].date.length() > 0 &&
+          calendarEvents[i].date != "Today") {
+        line += calendarEvents[i].date + " ";
+      }
+      if (calendarEvents[i].time.length() > 0) {
+        line += calendarEvents[i].time + " ";
+      }
+      line += calendarEvents[i].title;
+
+      // Top rows (y < 145) have up to x=550 available when no alert is shown;
+      // Bottom rows (y >= 145) stay left of the hourly forecast at x=270.
+      size_t maxChars = (!alertActive && y < 145) ? 44 : 23;
+      line = truncateString(line, maxChars);
+
+      memset(buffer, 0, sizeof(buffer));
+      snprintf(buffer, sizeof(buffer), "%s", line.c_str());
+      EPD_ShowString(x, y, buffer, FONT_SIZE_16, BLACK, true);
+
+      y += rowStep;
+    }
+  }
+
   void displayWeatherForecast() {
     clearScreen();
     char buffer[STRING_BUFFER_SIZE];
@@ -1283,18 +1889,19 @@ private:
     // snprintf(buffer, sizeof(buffer), "５月４日　土");
     EPD_ShowStringRightAligned(790, 25, buffer, FONT_SIZE_36, BLACK);
 
-    // Display weather icon
-    String iconName = "icon_" + weatherInfo.icon + "_lg";
-    EPD_drawImage(10, 1, getIcon(iconName.c_str()));
+    bool alertActive = enableAlertDisplay &&
+                       !weatherApiResponse["alerts"].isNull() &&
+                       weatherApiResponse["alerts"].size() > 0;
 
-    if (enableAlertDisplay && !weatherApiResponse["alerts"].isNull() &&
-        weatherApiResponse["alerts"].size() > 0) {
+    if (alertActive) {
       displayAlerts(270, 0);
       displayTemperature(740, 70, false);
     } else {
-      displayCurrentInfo(380, 30);
       displayTemperature(740, 105, true);
     }
+
+    // Display Google Calendar events in the left/middle area
+    displayCalendarEvents(16, 25, alertActive);
 
     // Display future forecast
     drawWeatherFutureForecast(270, 160, 5);
@@ -1591,6 +2198,7 @@ public:
 
   void begin() {
     errorMessageBuffer = "";
+    lowPowerMode = configManager.getLowPowerMode();
     screenPowerOn();
     EPD_GPIOInit();
     if (!lowPowerMode) {
@@ -1617,6 +2225,16 @@ public:
         char title[] = "WiFi Connection Failed";
         char msg[] =
             "Please hold the config button during boot to reconfigure.";
+        displayErrorMessage(title, msg);
+        return false;
+      }
+
+      // Resolve location (manual override takes precedence over cached GeoJS)
+      if (!resolveLocationWithGeoIp()) {
+        char title[] = "Location Lookup Failed";
+        char msg[256];
+        memset(msg, 0, sizeof(msg));
+        snprintf(msg, sizeof(msg), "%s", errorMessageBuffer.c_str());
         displayErrorMessage(title, msg);
         return false;
       }
@@ -1727,9 +2345,8 @@ void setup() {
   // If config button is held, it will show the config portal
   bool wifiConnected = configManager.begin(CONFIG_BUTTON_PIN);
 
-  // Get low power mode from config (or use default if not yet configured)
-  bool lowPowerMode =
-      configManager.isConfigured() ? configManager.getLowPowerMode() : true;
+  // Get low power mode from config
+  bool lowPowerMode = configManager.getLowPowerMode();
 
   if (lowPowerMode) {
     setCpuFrequencyMhz(80);

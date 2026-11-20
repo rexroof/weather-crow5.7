@@ -5,7 +5,7 @@ Weather station using [CrowPanel ESP32 E-Paper HMI 5.79-inch Display](https://ww
 
 This code based on the CrowPanel ESP32 E-Paper HMI 5.79-inch Display [example](https://www.elecrow.com/wiki/CrowPanel_ESP32_E-paper_5.79-inch_HMI_Display.html). I've added and modified the code to display custom weather icons and font rendering.
 It is a weather station that displays the current weather and forecast for the next 5 to 25 hours depending on the configuration.
-The weather data is fetched from the [Open-Meteo](https://open-meteo.com/) API, and active weather alerts are fetched from the [US National Weather Service](https://www.weather.gov/documentation/services-web-api) API.
+The weather data is fetched from the [Open-Meteo](https://open-meteo.com/) API (global coverage), location can be auto-detected and cached via [GeoJS](https://www.geojs.io/) (or manually overridden in the config portal), and active regional weather alerts are fetched automatically for the US ([NWS](https://www.weather.gov/documentation/services-web-api)), Canada ([ECCC](https://api.weather.gc.ca/)), Norway ([MET Norway](https://api.met.no/weatherapi/metalerts/2.0/documentation)), and Germany ([Bright Sky / DWD](https://brightsky.dev/)).
 
 ---
 
@@ -23,7 +23,7 @@ The weather data is fetched from the [Open-Meteo](https://open-meteo.com/) API, 
 1. Device creates WiFi hotspot: **WeatherCrow-Config**
 2. Connect to it on your phone/computer
 3. Go to **192.168.4.1**
-4. Enter your WiFi credentials and location coordinates (no API key required!)
+4. Enter your WiFi credentials (no API key required; leave latitude/longitude blank for automatic GeoJS location detection, or enter coordinates to override)
 
 ---
 
@@ -74,9 +74,10 @@ If you want to modify the code or build from source:
 ---
 
 # Credits
-- Weather data:
+- Weather & Location data:
   - Weather data provided by [Open-Meteo.com](https://open-meteo.com/)
-  - Weather alerts provided by [US National Weather Service](https://www.weather.gov/)
+  - Optional GeoIP location lookup provided by [GeoJS](https://www.geojs.io/)
+  - Regional weather alerts provided by [US National Weather Service](https://www.weather.gov/), [Environment and Climate Change Canada (MSC GeoMet)](https://api.weather.gc.ca/), [MET Norway](https://api.met.no/), and [Bright Sky / DWD](https://brightsky.dev/)
 
 - Icons:
   - [Weather Icons](https://erikflowers.github.io/weather-icons/)

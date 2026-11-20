@@ -12,18 +12,27 @@ static ConfigManager *configManagerInstance = nullptr;
 static WiFiManager *currentWM = nullptr;
 
 ConfigManager::ConfigManager()
-    : configButtonPin(-1), paramLatitude(nullptr), paramLongitude(nullptr),
-      paramLocationName(nullptr), paramRefreshMinutes(nullptr),
+    : configButtonPin(-1), paramGeoHint(nullptr), paramLatitude(nullptr),
+      paramLongitude(nullptr), paramLocationName(nullptr),
+      paramCalendarUrl(nullptr), paramRefreshMinutes(nullptr),
       paramLowPowerMode(nullptr), paramHourInterval(nullptr),
-      paramUnits(nullptr), paramEnableAlerts(nullptr) {
+      paramUnits(nullptr), paramEnableAlerts(nullptr),
+      paramAlertRegion(nullptr) {
 
   // Set default values
   config.latitude = "";
   config.longitude = "";
   config.locationName = "";
+  config.calendarUrl = DEFAULT_CALENDAR_URL;
   config.refreshMinutes = DEFAULT_REFRESH_MINUTES;
   config.lowPowerMode = DEFAULT_LOW_POWER_MODE;
   config.hourInterval = DEFAULT_HOUR_INTERVAL;
+  config.alertRegion = "auto";
+  config.geoLatitude = "";
+  config.geoLongitude = "";
+  config.geoCity = "";
+  config.geoCountryCode = "";
+  config.geoSsid = "";
 
   configManagerInstance = this;
 }
@@ -80,8 +89,7 @@ bool ConfigManager::begin(int buttonPin) {
 
   if (!isConfigured()) {
     Serial.println(
-        "[ConfigManager] Location not configured - starting config portal...");
-    return startConfigPortal("Location Setup Required");
+        "[ConfigManager] No manual or cached coordinates yet - will resolve via GeoJS");
   }
 
   Serial.println("[ConfigManager] WiFi connected!");
@@ -145,23 +153,29 @@ bool ConfigManager::startConfigPortal(const char *reason) {
   currentWM = nullptr;
 
   // Cleanup WiFiManager parameters
+  delete paramGeoHint;
   delete paramLatitude;
   delete paramLongitude;
   delete paramLocationName;
+  delete paramCalendarUrl;
   delete paramRefreshMinutes;
   delete paramLowPowerMode;
   delete paramHourInterval;
   delete paramUnits;
   delete paramEnableAlerts;
+  delete paramAlertRegion;
 
+  paramGeoHint = nullptr;
   paramLatitude = nullptr;
   paramLongitude = nullptr;
   paramLocationName = nullptr;
+  paramCalendarUrl = nullptr;
   paramRefreshMinutes = nullptr;
   paramLowPowerMode = nullptr;
   paramHourInterval = nullptr;
   paramUnits = nullptr;
   paramEnableAlerts = nullptr;
+  paramAlertRegion = nullptr;
 
   return result;
 }
@@ -170,18 +184,43 @@ void ConfigManager::setupWiFiManager(WiFiManager &wm) {
   // Create custom parameters
   // Note: WiFiManager allocates char buffers, but we need to manage memory
 
-  // Latitude
+  // GeoIP status hint (shows cached GeoJS location if present)
+  if (config.hasGeoCache()) {
+    geoHintHtml = "<p><small>GeoIP cached: ";
+    if (config.geoCity.length() > 0) {
+      geoHintHtml += config.geoCity;
+      if (config.geoCountryCode.length() > 0) {
+        geoHintHtml += ", " + config.geoCountryCode;
+      }
+      geoHintHtml += " ";
+    }
+    geoHintHtml += "(" + config.geoLatitude + ", " + config.geoLongitude +
+                   "). Leave Lat/Lon blank to use GeoIP.</small></p>";
+  } else {
+    geoHintHtml =
+        "<p><small>Leave Lat/Lon blank to auto-detect location via "
+        "GeoJS.</small></p>";
+  }
+  paramGeoHint = new WiFiManagerParameter(geoHintHtml.c_str());
+
+  // Latitude (manual override; blank = auto via GeoJS)
   paramLatitude = new WiFiManagerParameter(
-      "latitude", "Latitude (e.g., 36.14109)", config.latitude.c_str(), 20);
+      "latitude", "Latitude (blank = auto GeoIP)", config.latitude.c_str(), 20);
 
-  // Longitude
+  // Longitude (manual override; blank = auto via GeoJS)
   paramLongitude = new WiFiManagerParameter(
-      "longitude", "Longitude (e.g., 137.20987)", config.longitude.c_str(), 20);
+      "longitude", "Longitude (blank = auto GeoIP)", config.longitude.c_str(),
+      20);
 
-  // Location Name
-  paramLocationName =
-      new WiFiManagerParameter("location", "Location Name (e.g., Toronto)",
-                               config.locationName.c_str(), 32);
+  // Location Name (optional override; blank = GeoJS city)
+  paramLocationName = new WiFiManagerParameter(
+      "location", "Location Name (blank = auto GeoIP)",
+      config.locationName.c_str(), 32);
+
+  // Google Apps Script Calendar Web App URL
+  paramCalendarUrl = new WiFiManagerParameter(
+      "calendar_url", "Google Script Calendar URL (optional)",
+      config.calendarUrl.c_str(), 200);
 
   // Refresh Minutes (number input)
   char refreshStr[8];
@@ -220,18 +259,41 @@ void ConfigManager::setupWiFiManager(WiFiManager &wm) {
   paramEnableAlerts = new WiFiManagerParameter(
       config.enableAlertDisplay
           ? "<br><label><input type='checkbox' name='alerts' value='1' "
-            "checked> Show Weather Alerts (US NWS)</label>"
+            "checked> Show Weather Alerts</label>"
           : "<br><label><input type='checkbox' name='alerts' value='1'> Show "
-            "Weather Alerts (US NWS)</label>");
+            "Weather Alerts</label>");
+
+  // Regional Alert Source dropdown
+  alertRegionHtml = "<br><label>Alert Source</label><select name='alert_region'>";
+  const char *regionVals[] = {"auto", "US", "CA", "NO", "DE"};
+  const char *regionLabels[] = {"Auto (by location)", "US (NWS)",
+                                "Canada (ECCC)", "Norway (MET Norway)",
+                                "Germany (Bright Sky / DWD)"};
+  for (int i = 0; i < 5; i++) {
+    alertRegionHtml += "<option value='";
+    alertRegionHtml += regionVals[i];
+    alertRegionHtml += "'";
+    if (config.alertRegion == regionVals[i]) {
+      alertRegionHtml += " selected";
+    }
+    alertRegionHtml += ">";
+    alertRegionHtml += regionLabels[i];
+    alertRegionHtml += "</option>";
+  }
+  alertRegionHtml += "</select>";
+  paramAlertRegion = new WiFiManagerParameter(alertRegionHtml.c_str());
 
   // Add parameters to WiFiManager
+  wm.addParameter(paramGeoHint);
   wm.addParameter(paramLatitude);
   wm.addParameter(paramLongitude);
   wm.addParameter(paramLocationName);
+  wm.addParameter(paramCalendarUrl);
   wm.addParameter(paramRefreshMinutes);
   wm.addParameter(paramHourInterval);
   wm.addParameter(paramUnits);
   wm.addParameter(paramEnableAlerts);
+  wm.addParameter(paramAlertRegion);
   wm.addParameter(paramLowPowerMode);
 
   // Set save callback - use currentWM to access server args
@@ -264,6 +326,11 @@ void ConfigManager::readWiFiManagerParams(WiFiManager &wm) {
     config.locationName.trim();
   }
 
+  if (paramCalendarUrl) {
+    config.calendarUrl = String(paramCalendarUrl->getValue());
+    config.calendarUrl.trim();
+  }
+
   if (paramRefreshMinutes) {
     int val = String(paramRefreshMinutes->getValue()).toInt();
     config.refreshMinutes = constrain(val, 1, 60);
@@ -293,19 +360,33 @@ void ConfigManager::readWiFiManagerParams(WiFiManager &wm) {
 
     // Enable Alerts checkbox
     config.enableAlertDisplay = wm.server->hasArg("alerts");
+
+    // Regional Alert Source dropdown
+    if (wm.server->hasArg("alert_region")) {
+      String region = wm.server->arg("alert_region");
+      if (region == "auto" || region == "US" || region == "CA" ||
+          region == "NO" || region == "DE") {
+        config.alertRegion = region;
+      }
+    }
   }
 
   Serial.println("[ConfigManager] Parameters read from portal:");
-  Serial.print("  Latitude: ");
-  Serial.println(config.latitude);
-  Serial.print("  Longitude: ");
-  Serial.println(config.longitude);
-  Serial.print("  Location: ");
-  Serial.println(config.locationName);
+  Serial.print("  Latitude (manual): ");
+  Serial.println(config.latitude.length() > 0 ? config.latitude : "(auto)");
+  Serial.print("  Longitude (manual): ");
+  Serial.println(config.longitude.length() > 0 ? config.longitude : "(auto)");
+  Serial.print("  Location (manual): ");
+  Serial.println(config.locationName.length() > 0 ? config.locationName
+                                                  : "(auto)");
+  Serial.print("  Calendar URL: ");
+  Serial.println(config.calendarUrl.length() > 0 ? "(set)" : "(empty)");
   Serial.print("  Refresh: ");
   Serial.println(config.refreshMinutes);
   Serial.print("  Hour Interval: ");
   Serial.println(config.hourInterval);
+  Serial.print("  Alert Region: ");
+  Serial.println(config.alertRegion);
   Serial.print("  Low Power: ");
   Serial.println(config.lowPowerMode ? "true" : "false");
 }
@@ -316,6 +397,10 @@ void ConfigManager::loadConfig() {
   config.latitude = preferences.getString("latitude", "");
   config.longitude = preferences.getString("longitude", "");
   config.locationName = preferences.getString("location", "");
+  config.calendarUrl = preferences.getString("cal_url", DEFAULT_CALENDAR_URL);
+  if (config.calendarUrl.length() == 0) {
+    config.calendarUrl = DEFAULT_CALENDAR_URL;
+  }
   config.refreshMinutes =
       preferences.getInt("refresh", DEFAULT_REFRESH_MINUTES);
   config.lowPowerMode =
@@ -323,20 +408,45 @@ void ConfigManager::loadConfig() {
   config.hourInterval = preferences.getInt("hour_int", DEFAULT_HOUR_INTERVAL);
   config.units = preferences.getString("units", "metric");
   config.enableAlertDisplay = preferences.getBool("alerts", true);
+  config.alertRegion = preferences.getString("alert_region", "auto");
+
+  // Load cached GeoJS results
+  config.geoLatitude = preferences.getString("geo_lat", "");
+  config.geoLongitude = preferences.getString("geo_lon", "");
+  config.geoCity = preferences.getString("geo_city", "");
+  config.geoCountryCode = preferences.getString("geo_cc", "");
+  config.geoSsid = preferences.getString("geo_ssid", "");
 
   preferences.end();
 
   Serial.println("[ConfigManager] Loaded config from NVS");
-  Serial.print("  Latitude: ");
-  Serial.println(config.latitude);
-  Serial.print("  Longitude: ");
-  Serial.println(config.longitude);
+  Serial.print("  Latitude (manual): ");
+  Serial.println(config.latitude.length() > 0 ? config.latitude : "(auto)");
+  Serial.print("  Longitude (manual): ");
+  Serial.println(config.longitude.length() > 0 ? config.longitude : "(auto)");
   Serial.print("  Location: ");
-  Serial.println(config.locationName);
+  Serial.println(getLocationName());
+  if (config.hasGeoCache()) {
+    Serial.print("  GeoIP cache: ");
+    Serial.print(config.geoCity);
+    Serial.print(", ");
+    Serial.print(config.geoCountryCode);
+    Serial.print(" (");
+    Serial.print(config.geoLatitude);
+    Serial.print(", ");
+    Serial.print(config.geoLongitude);
+    Serial.print(") [SSID: ");
+    Serial.print(config.geoSsid);
+    Serial.println("]");
+  }
+  Serial.print("  Calendar URL: ");
+  Serial.println(config.calendarUrl.length() > 0 ? "(set)" : "(empty)");
   Serial.print("  Refresh: ");
   Serial.println(config.refreshMinutes);
   Serial.print("  Hour Interval: ");
   Serial.println(config.hourInterval);
+  Serial.print("  Alert Region: ");
+  Serial.println(config.alertRegion);
   Serial.print("  Low Power: ");
   Serial.println(config.lowPowerMode ? "true" : "false");
 }
@@ -347,15 +457,38 @@ void ConfigManager::saveConfig() {
   preferences.putString("latitude", config.latitude);
   preferences.putString("longitude", config.longitude);
   preferences.putString("location", config.locationName);
+  preferences.putString("cal_url", config.calendarUrl);
   preferences.putInt("refresh", config.refreshMinutes);
   preferences.putBool("low_power", config.lowPowerMode);
   preferences.putInt("hour_int", config.hourInterval);
   preferences.putString("units", config.units);
   preferences.putBool("alerts", config.enableAlertDisplay);
+  preferences.putString("alert_region", config.alertRegion);
 
   preferences.end();
 
   Serial.println("[ConfigManager] Saved config to NVS");
+}
+
+void ConfigManager::saveGeoIpCache(const String &lat, const String &lon,
+                                   const String &city,
+                                   const String &countryCode,
+                                   const String &ssid) {
+  config.geoLatitude = lat;
+  config.geoLongitude = lon;
+  config.geoCity = city;
+  config.geoCountryCode = countryCode;
+  config.geoSsid = ssid;
+
+  preferences.begin(PREFS_NAMESPACE, false); // Read-write mode
+  preferences.putString("geo_lat", config.geoLatitude);
+  preferences.putString("geo_lon", config.geoLongitude);
+  preferences.putString("geo_city", config.geoCity);
+  preferences.putString("geo_cc", config.geoCountryCode);
+  preferences.putString("geo_ssid", config.geoSsid);
+  preferences.end();
+
+  Serial.println("[ConfigManager] Saved GeoJS cache to NVS");
 }
 
 void ConfigManager::resetConfig() {
@@ -372,11 +505,18 @@ void ConfigManager::resetConfig() {
   config.latitude = "";
   config.longitude = "";
   config.locationName = "";
+  config.calendarUrl = "";
   config.refreshMinutes = DEFAULT_REFRESH_MINUTES;
   config.lowPowerMode = DEFAULT_LOW_POWER_MODE;
   config.hourInterval = DEFAULT_HOUR_INTERVAL;
   config.units = "metric";
   config.enableAlertDisplay = true;
+  config.alertRegion = "auto";
+  config.geoLatitude = "";
+  config.geoLongitude = "";
+  config.geoCity = "";
+  config.geoCountryCode = "";
+  config.geoSsid = "";
 
   Serial.println("[ConfigManager] Configuration reset to defaults");
 }
