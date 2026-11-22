@@ -135,9 +135,9 @@ bool ConfigManager::startConfigPortal(const char *reason) {
 
   char refreshStr[8];
   snprintf(refreshStr, sizeof(refreshStr), "%d", config.refreshMinutes);
-  WiFiManagerParameter refreshMinutesParam("refresh", "Refresh Minutes (1-60)",
+  WiFiManagerParameter refreshMinutesParam("refresh", "Refresh Minutes (10-60)",
                                            refreshStr, 4,
-                                           "type='number' min='1' max='60'");
+                                           "type='number' min='10' max='60'");
 
   char hourStr[4];
   snprintf(hourStr, sizeof(hourStr), "%d", config.hourInterval);
@@ -149,8 +149,14 @@ bool ConfigManager::startConfigPortal(const char *reason) {
       config.lowPowerMode
           ? "<br><label><input type='checkbox' name='low_power' value='1' "
             "checked> Low Power Mode</label>"
+            "<br><small>Lowers CPU speed, turns WiFi off right after each "
+            "update, and disables the status LED. Meant for battery power; "
+            "not needed when plugged in.</small>"
           : "<br><label><input type='checkbox' name='low_power' value='1'> Low "
-            "Power Mode</label>");
+            "Power Mode</label>"
+            "<br><small>Lowers CPU speed, turns WiFi off right after each "
+            "update, and disables the status LED. Meant for battery power; "
+            "not needed when plugged in.</small>");
 
   const char *unitsMetricSelected =
       config.units == "metric"
@@ -376,9 +382,8 @@ void ConfigManager::readWiFiManagerParams(WiFiManager &wm) {
 
   if (paramRefreshMinutes) {
     int val = String(paramRefreshMinutes->getValue()).toInt();
-    config.refreshMinutes = constrain(val, 1, 60);
-    if (val == 0)
-      config.refreshMinutes = DEFAULT_REFRESH_MINUTES;
+    config.refreshMinutes =
+        (val == 0) ? DEFAULT_REFRESH_MINUTES : constrain(val, 10, 60);
   }
 
   if (paramHourInterval) {
@@ -453,7 +458,7 @@ void ConfigManager::loadConfig() {
     config.calendarUrl = DEFAULT_CALENDAR_URL;
   }
   config.refreshMinutes =
-      preferences.getInt("refresh", DEFAULT_REFRESH_MINUTES);
+      constrain(preferences.getInt("refresh", DEFAULT_REFRESH_MINUTES), 10, 60);
   config.lowPowerMode =
       preferences.getBool("low_power", DEFAULT_LOW_POWER_MODE);
   config.hourInterval = preferences.getInt("hour_int", DEFAULT_HOUR_INTERVAL);

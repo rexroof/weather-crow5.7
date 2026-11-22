@@ -13,7 +13,7 @@
 #include <WiFiManager.h>
 
 // Default configuration values
-#define DEFAULT_REFRESH_MINUTES 30
+#define DEFAULT_REFRESH_MINUTES 15
 #define DEFAULT_HOUR_INTERVAL 3
 #define DEFAULT_LOW_POWER_MODE true
 #define DEFAULT_CALENDAR_URL ""
